@@ -1,0 +1,13 @@
+{
+  "name": "agent-flow",
+  "description": "A live workflow panel for Claude Code: the main model, the advisor and every spawned agent as cards joined by arrows",
+  "owner": {
+    "name": "luucas42"
+  },
+  "plugins": [
+    {
+      "name": "agent-flow",
+      "source": "./"
+    }
+  ]
+}

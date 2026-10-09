@@ -1,0 +1,19 @@
+{
+  "name": "agent-flow",
+  "version": "0.2.0",
+  "description": "A live workflow panel: the main model, the advisor and every spawned agent as cards joined by arrows",
+  "author": {
+    "name": "luucas42"
+  },
+  "homepage": "https://github.com/luucas42/agent-flow",
+  "repository": "https://github.com/luucas42/agent-flow",
+  "license": "MIT",
+  "keywords": [
+    "mod",
+    "agents",
+    "subagents",
+    "workflow",
+    "panel"
+  ],
+  "types": "./types/index.d.ts"
+}
