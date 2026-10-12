@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { AgentStatus, EngineInterface, PaneOpenArgs, Register, RenderSurface } from 'claude-code'
 
-import type { Flow } from '../types'
+import type { Flow, SessionRow } from '../types'
 import { agentTranscript, firstLine, refusedRequestIds, target, ticketText } from './format'
 import type { Ticket } from './format'
 import {
@@ -24,6 +24,18 @@ import {
 } from './model'
 import type { Notice, NotifyLevel, Outcome } from './model'
 import { scene } from './scene'
+import {
+  TAIL_BYTES,
+  liveClaudePids,
+  parseRegistered,
+  parseTail,
+  rowOf,
+  sessionNotices,
+  sortRows,
+  stateOf,
+  transcriptPath,
+} from './sessions'
+import type { Registered, Tail } from './sessions'
 import { view } from './view'
 
 const COMMAND = 'flow'
@@ -33,10 +45,12 @@ const USAGE = 'Usage: /flow [show | hide | reset]'
 const TICK_MS = 1_000
 const SYNC_EVERY = 5
 const SOUND_GAP_MS = 3_000
+const SESSIONS_MS = 3_000
 const TRANSCRIPT_TAIL = 3_000_000
 
 const flow = atom({ plugin: 'agent-flow', key: 'flow' } as const, EMPTY)
 const expanded = atom({ plugin: 'agent-flow', key: 'expanded' } as const, null)
+const sessions = atom({ plugin: 'agent-flow', key: 'sessions' } as const, [] as SessionRow[])
 
 const ENDED: Partial<Record<AgentStatus, Outcome>> = { completed: 'done', failed: 'failed', killed: 'stopped' }
 
@@ -192,12 +206,81 @@ async function sync($: EngineInterface): Promise<void> {
   }
 }
 
+/** The sessions poll's own state; a reload starts it over. */
+type Polling = { isBusy: boolean; isFirst: boolean; cache: Map<string, { key: string; tail: Tail }> }
+
+/** The registry files of the sessions on this machine; never a `*.key` file. */
+async function readRegistry($: EngineInterface, home: string): Promise<Registered[]> {
+  const dir = `${home}/.claude/sessions`
+  const found: Registered[] = []
+  for (const entry of await $.fs.list(dir)) {
+    if (entry.kind !== 'file' || !entry.name.endsWith('.json')) continue
+    try {
+      const text = await $.fs.read(`${dir}/${entry.name}`)
+      const reg = typeof text === 'string' ? parseRegistered(text) : undefined
+      if (reg !== undefined) found.push(reg)
+    } catch {
+      // A file that vanished or is half written is skipped.
+    }
+  }
+  return found
+}
+
+/** Every few seconds: the sessions on this machine as table rows, and a toast when another one starts waiting. */
+async function pollSessions($: EngineInterface, polling: Polling): Promise<void> {
+  if (polling.isBusy) return
+  polling.isBusy = true
+  try {
+    const home = await $.env.get('HOME')
+    if (home === undefined) return
+    const registered = await readRegistry($, home)
+    let live = registered
+    if (registered.length > 0) {
+      const ps = await $.process.run(['ps', '-o', 'pid=,comm=', '-p', registered.map(reg => reg.pid).join(',')])
+      const pids = liveClaudePids(ps.stdout)
+      live = registered.filter(reg => pids.has(reg.pid))
+    }
+
+    const thisId = await $.session.id().catch(() => undefined)
+    const now = await $.clock.now()
+    const rows: SessionRow[] = []
+    for (const reg of live) {
+      const key = `${reg.sessionId}:${reg.statusUpdatedAt}`
+      if (stateOf(reg, now) === 'working' || polling.cache.get(reg.sessionId)?.key !== key) {
+        let tail: Tail = {}
+        try {
+          tail = parseTail((await $.process.run(['tail', '-c', String(TAIL_BYTES), transcriptPath(home, reg)])).stdout)
+        } catch {
+          // No transcript yet: the row shows no detail.
+        }
+        polling.cache.set(reg.sessionId, { key, tail })
+      }
+      rows.push(rowOf(reg, polling.cache.get(reg.sessionId)?.tail, thisId, now))
+    }
+
+    const sorted = sortRows(rows)
+    const before = await read($, sessions)
+    if (JSON.stringify(before) !== JSON.stringify(sorted)) await update($, sessions, () => sorted)
+    const isFirst = polling.isFirst
+    polling.isFirst = false
+    if (!isFirst && (alerts.level === 'batch-and-errors' || alerts.level === 'every-agent')) {
+      announce($, sessionNotices(before, sorted), now)
+    }
+  } catch {
+    // A failed poll keeps the last rows; try again on the next beat.
+  } finally {
+    polling.isBusy = false
+  }
+}
+
 export const register: Register = (on, options) => {
   alerts.level = NOTIFY_LEVELS.find(level => level === options.notifications) ?? 'batch-and-errors'
   alerts.isSoundOn = options.sound !== false
   alerts.lastSoundAt = 0
   const ticking: Ticking = { beats: 0, isBusy: false }
+  const polling: Polling = { isBusy: false, isFirst: true, cache: new Map() }
   let ticker: { cancel: () => void } | undefined
+  let poller: { cancel: () => void } | undefined
 
   on('session.start', async ($, e, next) => {
     try {
@@ -211,6 +294,8 @@ export const register: Register = (on, options) => {
       await apply($, (f, now) => started(f, now, name))
       ticker?.cancel()
       ticker = $.clock.every(TICK_MS, () => void tick($, ticking))
+      poller?.cancel()
+      poller = $.clock.every(SESSIONS_MS, () => void pollSessions($, polling))
       void $.ui.open(OPEN)
     } catch {
       // The panel is a bonus: never hold the session up.
@@ -311,9 +396,10 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const current = await read($, flow)
     const open = await read($, expanded)
+    const rows = await read($, sessions)
     if (e.surface === 'terminal') {
       const { Client } = $.ui.resolve(e)
-      const props = scene(current, open, e.props.view.agentId, { columnsHint: e.props.bodyColumns, isCompact: e.props.placement === 'inline' })
+      const props = scene(current, open, e.props.view.agentId, { columnsHint: e.props.bodyColumns, isCompact: e.props.placement === 'inline' }, rows)
       return <Client key="hud" module="./flow-client.tsx" props={props} width="100%" />
     }
     const { Box, Text, Button } = $.ui.resolve(e)

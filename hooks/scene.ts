@@ -1,4 +1,4 @@
-import type { Card, CardStatus, Flow } from '../types'
+import type { Card, CardStatus, Flow, SessionRow, SessionState } from '../types'
 import { COLORS, effortBar, familyOf, minutes, modelName, tokens, usd } from './format'
 import {
   CARD_BUCKETS, FLOW_BUCKETS, advisorState, bucketOf, cardState, cardsInOrder, instanceFigures, instanceState,
@@ -13,6 +13,8 @@ export type SceneCard = {
   type: string; index: number; model: string; role: string; color: string; tone: Tone
   spawned: number; done: number; isOpen: boolean; isViewed: boolean; state: string; tokens: string; spark: number[]
 }
+export type SceneSessionRow = { id: string; state: SessionState; name: string; project: string; label: string; what: string }
+export type SceneSessions = { open: number; waiting: number; working: number; shell: number; quiet: number; rows: SceneSessionRow[] }
 export type Scene = {
   columnsHint: number
   isCompact: boolean
@@ -23,6 +25,7 @@ export type Scene = {
   advisor?: { name: string; color: string; isGlowing: boolean; asked: string; calls: number }
   cards: SceneCard[]
   open?: SceneList
+  sessions?: SceneSessions
 }
 
 /** The most rows an open list sends to the Client. */
@@ -74,8 +77,38 @@ function sceneList(flow: Flow, card: Card): SceneList {
   }
 }
 
+/** An age as the sessions table shows it: `12s`, `4m`, `2h`, `4d`. */
+export function short(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000))
+  if (s < 60) return `${s}s`
+  if (s < 3600) return `${Math.floor(s / 60)}m`
+  if (s < 86_400) return `${Math.floor(s / 3600)}h`
+  return `${Math.floor(s / 86_400)}d`
+}
+
+const STATE_WORDS: Record<Exclude<SessionState, 'other'>, string> = { waiting: 'WAITING', working: 'WORKING', shell: 'SHELL', quiet: 'quiet' }
+
+function sceneSessions(rows: SessionRow[], now: number): SceneSessions {
+  const count = (state: SessionState) => rows.filter(row => row.state === state).length
+  return {
+    open: rows.length,
+    waiting: count('waiting'),
+    working: count('working'),
+    shell: count('shell'),
+    quiet: count('quiet'),
+    rows: rows.map(row => ({
+      id: row.id,
+      state: row.state,
+      name: row.isThis ? `${row.name} · this` : row.name,
+      project: row.project,
+      label: `${row.state === 'other' ? row.status.toUpperCase() : STATE_WORDS[row.state]} ${short(now - row.since)}`,
+      what: row.what ?? '',
+    })),
+  }
+}
+
 /** Everything the HUD draws, as plain text and numbers: the Client's props. */
-export function scene(flow: Flow, expanded: string | null, viewAgentId: string | undefined, frame: { columnsHint: number; isCompact: boolean }): Scene {
+export function scene(flow: Flow, expanded: string | null, viewAgentId: string | undefined, frame: { columnsHint: number; isCompact: boolean }, sessions: SessionRow[] = []): Scene {
   const idx = bucketOf(flow, flow.now)
   const cards = cardsInOrder(flow)
   const running = totalRunning(flow)
@@ -88,7 +121,7 @@ export function scene(flow: Flow, expanded: string | null, viewAgentId: string |
   return {
     columnsHint: frame.columnsHint,
     isCompact: frame.isCompact,
-    isAnimated: running > 0 || flow.main.turnActive || isGlowing(flow.advisor, flow.now),
+    isAnimated: running > 0 || flow.main.turnActive || isGlowing(flow.advisor, flow.now) || sessions.some(row => row.state === 'working'),
     header: {
       ...(flow.costUsd === undefined ? {} : { cost: usd(flow.costUsd) }),
       age: minutes(flow.now - flow.startedAt),
@@ -120,5 +153,6 @@ export function scene(flow: Flow, expanded: string | null, viewAgentId: string |
       : {}),
     cards: cards.map((card, index) => sceneCard(flow, card, index, expanded, viewAgentId, idx)),
     ...(openCard === undefined ? {} : { open: sceneList(flow, openCard) }),
+    ...(sessions.length === 0 ? {} : { sessions: sceneSessions(sessions, flow.now) }),
   }
 }

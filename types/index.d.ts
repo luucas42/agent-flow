@@ -67,8 +67,17 @@ export type Flow = {
   transcriptPath?: string
 }
 
+/** What a Claude Code session on this machine is doing, for the sessions table. */
+export type SessionState = 'waiting' | 'working' | 'shell' | 'quiet' | 'other'
+
+/** One row of the sessions table. */
+export type SessionRow = {
+  id: string; pid: number; name: string; project: string
+  state: SessionState; status: string; since: number; what?: string; isThis: boolean
+}
+
 declare module 'claude-code' {
   interface PluginState {
-    'agent-flow': { flow: Flow; expanded: string | null }
+    'agent-flow': { flow: Flow; expanded: string | null; sessions: SessionRow[] }
   }
 }

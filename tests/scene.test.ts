@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { EMPTY, finished, mainRefused, spawned, stepped, turnStarted } from '../hooks/model'
-import { MAX_ROWS, scene, toneOf } from '../hooks/scene'
-import type { Flow } from '../types'
+import { MAX_ROWS, scene, short, toneOf } from '../hooks/scene'
+import type { Flow, SessionRow } from '../types'
 
 const T = 1_000_000
 const FRAME = { columnsHint: 104, isCompact: false }
@@ -70,5 +70,42 @@ describe('scene', () => {
     const s = scene(f, 'explorer', undefined, FRAME)
     expect(s.open?.rows).toHaveLength(MAX_ROWS)
     expect(JSON.stringify(s).length).toBeLessThan(100_000)
+  })
+
+  describe('sessions', () => {
+    const MIN = 60_000
+    const sess = (over: Partial<SessionRow>): SessionRow => ({ id: 's', pid: 1, name: 'n', project: 'p', state: 'waiting', status: 'idle', since: T, isThis: false, ...over })
+    const at = (rows: SessionRow[]) => scene({ ...base, now: T + 4 * MIN }, null, undefined, FRAME, rows)
+
+    test('labels: the state word and the age since the change', () => {
+      const s = at([
+        sess({ id: 'a', state: 'waiting' }), sess({ id: 'b', state: 'working', since: T + 2 * MIN }),
+        sess({ id: 'c', state: 'shell', since: T - 56 * MIN }), sess({ id: 'd', state: 'quiet', since: T - 4 * 86_400_000 + 4 * MIN }),
+        sess({ id: 'e', state: 'other', status: 'weird', since: T - MIN }),
+      ])
+      expect(s.sessions?.rows.map(r => r.label)).toEqual(['WAITING 4m', 'WORKING 2m', 'SHELL 1h', 'quiet 4d', 'WEIRD 5m'])
+    })
+
+    test('own rows are tagged, the counts add up and what defaults to empty', () => {
+      const s = at([sess({ id: 'a', name: 'me', isThis: true, what: 'Done' }), sess({ id: 'b', state: 'working' }), sess({ id: 'c', state: 'quiet' }), sess({ id: 'd', state: 'shell' })])
+      expect(s.sessions).toMatchObject({ open: 4, waiting: 1, working: 1, shell: 1, quiet: 1 })
+      expect(s.sessions?.rows[0]).toMatchObject({ name: 'me · this', what: 'Done' })
+      expect(s.sessions?.rows[1]?.what).toBe('')
+    })
+
+    test('absent without rows; a working row animates an idle flow', () => {
+      expect(scene(base, null, undefined, FRAME).sessions).toBeUndefined()
+      expect(scene(base, null, undefined, FRAME, []).sessions).toBeUndefined()
+      expect(at([sess({ state: 'waiting' })]).isAnimated).toBe(false)
+      expect(at([sess({ state: 'working' })]).isAnimated).toBe(true)
+    })
+  })
+
+  test('short ages', () => {
+    expect(short(12_000)).toBe('12s')
+    expect(short(240_000)).toBe('4m')
+    expect(short(7_200_000)).toBe('2h')
+    expect(short(4 * 86_400_000)).toBe('4d')
+    expect(short(-5)).toBe('0s')
   })
 })

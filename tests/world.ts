@@ -1,7 +1,7 @@
 import type { On, TurnStepServerToolUse } from 'claude-code'
 import { mock } from 'claude-code/testing'
 
-import type { Flow } from '../types'
+import type { Flow, SessionRow } from '../types'
 
 export const T0 = 1_000_000
 export const FLOW = { plugin: 'agent-flow', key: 'flow' } as const
@@ -20,14 +20,18 @@ export function watchFlow(on: On) {
   let last: Flow | undefined
   on('state.set', (_, e, next) => {
     if (e.plugin === FLOW.plugin && e.key === FLOW.key) last = e.value as Flow
+    if (e.plugin === FLOW.plugin && e.key === 'sessions') lastSessions = e.value as SessionRow[]
     return next(e)
   })
   return () => last
 }
 
+let lastSessions: SessionRow[] | undefined
+
 /** The engine beneath the plugin: a clock, spawns that start as a1, a2, …, tools and turns that answer. */
 export function world(on: On) {
   const clock = mock.clock(on, { now: T0 })
+  lastSessions = undefined
   const peek = watchFlow(on)
   const upcoming = { serverToolUses: [] as TurnStepServerToolUse[], tokens: 1000 }
   let count = 0
@@ -54,7 +58,7 @@ export function world(on: On) {
     }
   })
 
-  return { clock, upcoming, peek }
+  return { clock, upcoming, peek, peekSessions: () => lastSessions }
 }
 
 /**

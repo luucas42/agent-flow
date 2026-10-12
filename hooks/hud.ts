@@ -1,6 +1,7 @@
+import type { SessionState } from '../types'
 import { COLORS, ERROR_COLOR, WARN_COLOR, WHITE } from './format'
 import { ASK_WIDTH, COMPACT_BELOW, GAP, arrows, branch, centers, chunk, grid, topRow } from './layout'
-import type { Scene, SceneCard, SceneList, Tone } from './scene'
+import type { Scene, SceneCard, SceneList, SceneSessions, Tone } from './scene'
 
 export const INK = '#11151B'
 export const CHIP = '#1C2330'
@@ -343,6 +344,48 @@ function delegatesBlock(s: Scene, columns: number, junction: number, frame: numb
   return stack([{ lines: [head], hits: [] }, ...chunk(s.cards, perRow).map(row => cardRowBlock(s, row, columns, junction, width, frame))])
 }
 
+type SessionColors = { glyph: string; name: string; label: string; what: string; isBold: boolean }
+
+function sessionColors(state: SessionState): SessionColors {
+  switch (state) {
+    case 'waiting':
+      return { glyph: WARN_COLOR, name: WHITE, label: WARN_COLOR, what: COLORS.opus, isBold: true }
+    case 'working':
+      return { glyph: COLORS.haiku, name: COLORS.opus, label: COLORS.haiku, what: MUTED, isBold: false }
+    case 'shell':
+      return { glyph: COLORS.sonnet, name: COLORS.opus, label: COLORS.sonnet, what: DIM, isBold: false }
+    case 'quiet':
+      return { glyph: DIM, name: DIM, label: DIM, what: DIM, isBold: false }
+    default:
+      return { glyph: MUTED, name: COLORS.opus, label: MUTED, what: DIM, isBold: false }
+  }
+}
+
+const sessionGlyph = (state: SessionState, frame: number): string =>
+  state === 'waiting' ? '●' : state === 'working' ? spinner(frame) : state === 'shell' ? '$' : state === 'quiet' ? '○' : '·'
+
+/** The sessions table: a band with the counts, one boxed row per session, the bottom. */
+function sessionsBlock(sessions: SceneSessions, columns: number, frame: number): Block {
+  const lk: Look = { band: { bg: CHIP, fg: WHITE }, border: DIM, text: WHITE, sub: MUTED }
+  const left = `SESSIONS · ${sessions.open} open`
+  const shell = sessions.shell > 0 ? `  $ ${sessions.shell} shell` : ''
+  const words = `● ${sessions.waiting} waiting  ● ${sessions.working} working  ○ ${sessions.quiet} quiet${shell}`
+  const bare = `● ${sessions.waiting}  ● ${sessions.working}  ○ ${sessions.quiet}${sessions.shell > 0 ? `  $ ${sessions.shell}` : ''}`
+  const right = widthOf(left) + widthOf(words) + 5 <= columns ? words : bare
+  const showProject = columns >= 90
+  const rows = sessions.rows.map((row): Line => {
+    const c = sessionColors(row.state)
+    return boxRow(columns, DIM, [
+      { text: `${sessionGlyph(row.state, frame)} `, fg: c.glyph },
+      { text: pad(row.name, 21) + ' ', fg: c.name, ...(c.isBold ? { bold: true as const } : {}) },
+      ...(showProject ? [{ text: `${pad(row.project, 18)} `, fg: MUTED }] : []),
+      { text: `${pad(row.label, 12)} `, fg: c.label, ...(row.state === 'waiting' ? { bold: true as const } : {}) },
+      { text: row.what, fg: c.what },
+    ])
+  })
+  return { lines: [band(columns, lk, left, right), ...rows, bottom(columns, DIM)], hits: [] }
+}
+
 function compactBlock(s: Scene, columns: number, frame: number): Block {
   const m = s.main
   const mainGlyph = glyphOf(m.state, m.tone, frame)
@@ -365,6 +408,14 @@ function compactBlock(s: Scene, columns: number, frame: number): Block {
       }
     }
   }
+  const sessions = s.sessions
+  if (sessions !== undefined) {
+    lines.push([{ text: ` SESSIONS · ${sessions.open} `, fg: WHITE, bg: CHIP, bold: true }])
+    for (const row of sessions.rows) {
+      const c = sessionColors(row.state)
+      lines.push([{ text: `${sessionGlyph(row.state, frame)} ${row.name} · ${row.label}`, fg: c.label }])
+    }
+  }
   return { lines, hits }
 }
 
@@ -380,6 +431,8 @@ export function hud(s: Scene, columns: number, frame: number): Hud {
           { lines: [headerBlock(s, columns), legendBlock(s), [spaces(1)]], hits: [] },
           topBlock(s, columns, hasCards, frame),
           hasCards ? delegatesBlock(s, columns, junction, frame) : { lines: [], hits: [] },
+          s.sessions === undefined ? { lines: [], hits: [] } : { lines: [[spaces(1)]], hits: [] },
+          s.sessions === undefined ? { lines: [], hits: [] } : sessionsBlock(s.sessions, columns, frame),
         ])
     return { lines: out.lines.map(line => fit(line, columns)), hits: out.hits.filter(hit => hit.x1 <= columns) }
   } catch (err) {

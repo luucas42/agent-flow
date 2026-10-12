@@ -4,7 +4,7 @@ import { DIM, INK, asksDots, band, batchFill, bottom, boxRow, cut, flowCell, hud
 import { grid } from '../hooks/layout'
 import { EMPTY, finished, mainRefused, spawned, stepped, turnStarted } from '../hooks/model'
 import { scene } from '../hooks/scene'
-import type { Flow } from '../types'
+import type { Flow, SessionRow } from '../types'
 
 const text = (line: { text: string }[]) => line.map(r => r.text).join('')
 
@@ -199,5 +199,71 @@ describe('hud layout', () => {
   test('an empty session draws and never throws', () => {
     const empty = scene({ ...EMPTY, startedAt: T, now: T }, null, undefined, FRAME)
     for (const columns of [104, 61, 45, 10, 0]) for (const line of hud(empty, columns, 0).lines) expect(lineWidth(line)).toBeLessThanOrEqual(columns)
+  })
+
+  describe('sessions table', () => {
+    const MIN = 60_000
+    const now = T + 2000
+    const r = (id: string, name: string, project: string, state: SessionRow['state'], ago: number, what?: string, isThis = false): SessionRow =>
+      ({ id, pid: 1, name, project, state, status: state === 'working' ? 'busy' : state === 'quiet' ? 'idle' : state === 'shell' ? 'shell' : 'idle', since: now - ago, ...(what === undefined ? {} : { what }), isThis })
+    const rows = [
+      r('1', 'bet-ex-engine-c8', 'bet-ex-engine', 'waiting', 4 * MIN, 'Reconnect backoff eklendi, 12 test geçti'),
+      r('2', 'betex-ctrl-backend-71', 'betex-ctrl-backend', 'waiting', 38 * MIN, 'Migration çalıştırayım mı?'),
+      r('3', 'clickhouse', 'bet-ex-engine', 'working', 2 * MIN, 'Bash clickhouse-client --query "SELECT …"'),
+      r('4', 'betalux-55', 'Betalux', 'working', 41 * MIN, 'Write sessions.html', true),
+      r('5', 'hetzner-backup-etc', 'bex-mind', 'shell', 60 * MIN),
+      r('6', 'ps3838-integration', 'bet-ex-engine', 'quiet', 4 * 86_400_000),
+      r('7', 'bex-mind-1d', 'bex-mind', 'quiet', 12 * 86_400_000),
+    ]
+    const withRows = scene({ ...busy(), now }, 'explorer', undefined, FRAME, rows)
+
+    test('every line is non-empty and fits at 104, 80, 61 and 45 columns', () => {
+      for (const columns of [104, 80, 61, 45]) {
+        for (const frame of [0, 1]) {
+          const h = hud(withRows, columns, frame)
+          for (const line of h.lines) {
+            expect(lineWidth(line)).toBeGreaterThan(0)
+            expect(lineWidth(line)).toBeLessThanOrEqual(columns)
+          }
+        }
+      }
+    })
+
+    test('the band counts the sessions and the table rows are exactly the panel wide', () => {
+      const lines = plain(hud(withRows, 104, 0))
+      const band = lines.find(l => l.includes('SESSIONS')) ?? ''
+      expect(band).toContain('SESSIONS · 7 open')
+      expect(band).toContain('2 waiting')
+      expect(band).toContain('2 working')
+      expect(band).toContain('$ 1 shell')
+      const at = lines.indexOf(band)
+      expect(lines[at - 1]).toBe(' ')
+      for (const l of lines.slice(at + 1, at + 8)) expect(widthOf(l)).toBe(104)
+      expect(lines[at + 8]?.startsWith('└')).toBe(true)
+      expect(lines.slice(at + 1, at + 8).filter(l => l.includes('bet-ex-engine'))).toHaveLength(3)
+    })
+
+    test('the project column is dropped below 90 columns', () => {
+      const wide = plain(hud(withRows, 104, 0)).join('\n')
+      const narrow = plain(hud(withRows, 80, 0)).join('\n')
+      expect(wide).toContain('Betalux')
+      // some names contain their project, so look for the project as its own word
+      for (const p of ['Betalux', 'bex-mind ', 'bet-ex-engine ']) expect(narrow).not.toContain(p)
+      expect(narrow).toContain('WAITING 4m')
+    })
+
+    test('a working row moves with the frame', () => {
+      const row = (frame: number) => plain(hud(withRows, 104, frame)).find(l => l.includes('clickhouse ')) ?? ''
+      expect(row(0)).not.toBe('')
+      expect(row(0)).not.toBe(row(1))
+    })
+
+    test('compact mode has the chip and one line per session', () => {
+      const lines = plain(hud(withRows, 45, 0))
+      const at = lines.findIndex(l => l.includes('SESSIONS · 7'))
+      expect(at).toBeGreaterThan(0)
+      expect(lines.slice(at + 1)).toHaveLength(7)
+      expect(lines[at + 1]).toContain('bet-ex-engine-c8 · WAITING 4m')
+    })
   })
 })

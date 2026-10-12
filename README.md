@@ -48,6 +48,23 @@ A live workflow panel for Claude Code. It shows the main model, the advisor and 
   - the request IDs of the refused responses.
 - **Narrow panes.** Below 60 columns, or when the pane is inline, the panel falls back to one line per agent. Surfaces other than the terminal keep the plain card layout.
 
+## Sessions
+
+Below the panel, a `SESSIONS` table lists every Claude Code session running on this machine, one row each. A row shows the session's name, its project, how long it has been in its state, and what it is doing: the tool it has open while it works, or the first line of its last answer while it waits.
+
+| State | Meaning |
+| --- | --- |
+| `WAITING` | idle, and waiting for you |
+| `WORKING` | busy with a turn |
+| `SHELL` | running a shell command |
+| `quiet` | idle for more than 2 hours, so it no longer asks for you |
+
+Any other status the registry reports shows as it is, in capitals, with its age. Waiting rows come first, then working, shell, other and quiet, newest change first. Your own session is marked `· this`. Narrow panes drop the project and the detail, and the inline layout keeps one line per session.
+
+When another session goes from working to waiting, the panel raises a toast (`● api-work is waiting · backend`) and plays the rising ding. Your own session never toasts, and neither does the first look after a load. The toast follows the `notifications` option: it is off for `errors` and `off`.
+
+The table is refreshed every 3 seconds. It reads only `~/.claude/sessions/*.json` and the last 256 KB of each transcript, locally, and checks with `ps` that the process is still a live `claude`, so a stale file does not show. It never opens a `*.key` file, and nothing leaves your machine.
+
 ## Notifications & sound
 
 When something is worth looking up, the panel raises a toast and, on macOS, plays a short tone:
@@ -106,6 +123,7 @@ The mod only observes: every hook passes the session's events through untouched 
 | `turn.step` | model, effort and token counts per loop, and advisor calls on the main loop |
 | `turn.complete` | done, failed, stopped or refused, plus the answer's first line |
 | `$.agent.list()` | a check every 5 s that catches agents that ended without a `turn.complete` |
+| `~/.claude/sessions/*.json` and `ps`, every 3 s | the `SESSIONS` table |
 | `UserPromptSubmit` / `Stop` (settings hooks) | the transcript path, read only when you press `[ copy ]` |
 
 State lives in the session's `$.state`, so a reload keeps the panel. Agent cost is shown as tokens only; dollars appear only as the session total.
@@ -116,13 +134,14 @@ State lives in the session's `$.state`, so a reload keeps the panel. Agent cost 
 hooks/format.ts     names, tokens, durations, effort bars, tool verbs and targets
 hooks/model.ts      pure reducers over one state value (`flow`)
 hooks/layout.ts     card grid and the branch/arrow glyph runs
+hooks/sessions.ts   pure parsing, classifying, sorting and diffing of the sessions table rows
 hooks/scene.ts      a pure `Flow` to `Scene` step: all the formatted text the HUD shows
 hooks/hud.ts        a pure `Scene` to cell-exact lines and click targets, with the animation frames
 hooks/flow-client.tsx  the Client that draws the HUD, animates it and posts clicks and keys
 hooks/view.tsx      the plain Pane tree used off the terminal
-hooks/register.tsx  the event hooks, the ticker and `/flow`
+hooks/register.tsx  the event hooks, the tickers, the sessions poll and `/flow`
 sounds/             done.wav (batch ended) and alert.wav (failure or refusal)
-tests/              claude plugin test (101 tests)
+tests/              claude plugin test (133 tests)
 ```
 
 ```
