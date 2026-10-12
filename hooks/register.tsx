@@ -23,6 +23,7 @@ import {
   withTranscript,
 } from './model'
 import type { Notice, NotifyLevel, Outcome } from './model'
+import { scene } from './scene'
 import { view } from './view'
 
 const COMMAND = 'flow'
@@ -308,9 +309,14 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text, Button } = $.ui.resolve(e)
     const current = await read($, flow)
     const open = await read($, expanded)
+    if (e.surface === 'terminal') {
+      const { Client } = $.ui.resolve(e)
+      const props = scene(current, open, e.props.view.agentId, { columnsHint: e.props.bodyColumns, isCompact: e.props.placement === 'inline' })
+      return <Client key="hud" module="./flow-client.tsx" props={props} width="100%" />
+    }
+    const { Box, Text, Button } = $.ui.resolve(e)
     return view({ Box, Text, Button }, current, {
       bodyColumns: e.props.bodyColumns,
       placement: e.props.placement,
@@ -320,4 +326,18 @@ export const register: Register = (on, options) => {
       onCopy: (which, surface) => void copyDetails($, which, surface),
     })
   })
+
+  on('ui.message', async ($, e, next) => {
+    const data = e.data as { kind?: unknown; type?: unknown; target?: unknown } | null
+    if (data?.kind === 'toggle' && typeof data.type === 'string') {
+      const type = data.type
+      await update($, expanded, was => (was === type ? null : type))
+      return {}
+    }
+    if (data?.kind === 'copy' && typeof data.target === 'string') {
+      await copyDetails($, data.target, e.surface)
+      return {}
+    }
+    return next(e)
+  }).catch(($, e, next) => next(e))
 }

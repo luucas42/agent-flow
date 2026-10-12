@@ -1,9 +1,9 @@
-import type { Advisor, Batch, Card, CardStatus, Effort, Flow, Instance } from '../types'
+import type { Advisor, Batch, Card, CardStatus, Effort, Flow, Instance, Spark } from '../types'
 import { ROLES, ago, clip, duration, familyOf, tokens, verbOf } from './format'
 import type { Family } from './format'
 
 /** Bumped when the shape of `flow` changes; a session holding an older one starts over. */
-export const FLOW_VERSION = 3
+export const FLOW_VERSION = 4
 
 export const EMPTY: Flow = {
   version: FLOW_VERSION,
@@ -13,10 +13,32 @@ export const EMPTY: Flow = {
   advisor: { calls: 0 },
   cards: {},
   instances: {},
+  spark: {},
 }
 
 /** How long the asks arrow glows after an advisor call. */
 export const GLOW_MS = 6_000
+
+/** How long one sparkline bucket lasts, and how many the session and a card keep. */
+export const BUCKET_MS = 30_000
+export const FLOW_BUCKETS = 20
+export const CARD_BUCKETS = 10
+
+/** The bucket a moment falls in, counted from the session's start. */
+export const bucketOf = (flow: Flow, now: number): number => Math.max(0, Math.floor((now - flow.startedAt) / BUCKET_MS))
+
+/** Adds tokens into bucket `idx`, keeping only the last `keep` buckets. */
+export function addSpark(spark: Spark, idx: number, added: number, keep: number): Spark {
+  const out: Spark = {}
+  for (const [key, value] of Object.entries(spark)) if (Number(key) > idx - keep) out[key] = value
+  out[String(idx)] = (out[String(idx)] ?? 0) + added
+  return out
+}
+
+/** The last `n` buckets up to `idx`, oldest first; a missing bucket is 0. */
+export function sparkValues(spark: Spark, idx: number, n: number): number[] {
+  return Array.from({ length: n }, (_, i) => spark[String(idx - n + 1 + i)] ?? 0)
+}
 
 export type Usage = {
   input_tokens: number
@@ -103,6 +125,7 @@ export function spawned(flow: Flow, spawn: Spawn, now: number): Flow {
           runStartedAt: now,
           verbCounts: {},
           tokens: 0,
+          spark: {},
           model: spawn.model,
         }
       : prior.running === 0
@@ -179,6 +202,7 @@ export function toolUsed(flow: Flow, agentId: string, tool: string, now: number,
 
 export function stepped(flow: Flow, step: Step, now: number): Flow {
   const added = sumUsage(step.usage)
+  const idx = bucketOf(flow, now)
 
   if (step.agentId === undefined) {
     const main = {
@@ -192,7 +216,7 @@ export function stepped(flow: Flow, step: Step, now: number): Flow {
       asked === 0
         ? flow.advisor
         : { ...flow.advisor, calls: flow.advisor.calls + asked, lastEndedAt: Math.max(...step.advisorEnds) }
-    return { ...flow, main, advisor }
+    return { ...flow, main, advisor, spark: added === 0 ? flow.spark : addSpark(flow.spark, idx, added, FLOW_BUCKETS) }
   }
 
   const woken = touched(flow, step.agentId, now)
@@ -202,6 +226,7 @@ export function stepped(flow: Flow, step: Step, now: number): Flow {
 
   return {
     ...woken,
+    spark: added === 0 ? woken.spark : addSpark(woken.spark, idx, added, FLOW_BUCKETS),
     cards: {
       ...woken.cards,
       [instance.type]: {
@@ -209,6 +234,7 @@ export function stepped(flow: Flow, step: Step, now: number): Flow {
         model: step.model,
         effort: step.effort ?? card.effort,
         tokens: card.tokens + added,
+        spark: added === 0 ? card.spark : addSpark(card.spark, idx, added, CARD_BUCKETS),
       },
     },
     instances: {
@@ -276,7 +302,8 @@ export function clockKey(flow: Flow, now: number, expanded: string | null = null
   const asked = flow.advisor.lastEndedAt === undefined ? '' : ago(now - flow.advisor.lastEndedAt)
   const refused = flow.main.refusal === undefined ? '' : ago(now - flow.main.refusal.at)
   const isTicking = expanded !== null && instancesOf(flow, expanded).some(instance => instance.status === 'running')
-  return `${elapsed}|${isGlowing(flow.advisor, now)}|${asked}|${refused}${isTicking ? `|${Math.floor(now / 1000)}` : ''}`
+  const bucket = Object.keys(flow.spark).length > 0 ? bucketOf(flow, now) : ''
+  return `${elapsed}|${isGlowing(flow.advisor, now)}|${asked}|${refused}|${bucket}${isTicking ? `|${Math.floor(now / 1000)}` : ''}`
 }
 
 export const runningIds = (flow: Flow): string[] =>

@@ -2,10 +2,13 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import type { Flow } from '../types'
 import {
+  BUCKET_MS,
   EMPTY,
   FLOW_VERSION,
   GLOW_MS,
+  addSpark,
   advisorState,
+  bucketOf,
   cardState,
   clockKey,
   costed,
@@ -19,6 +22,7 @@ import {
   notices,
   reset,
   sectionCounts,
+  sparkValues,
   spawned,
   started,
   stepped,
@@ -344,5 +348,54 @@ describe('refusals, batches and notices', () => {
     f = toolUsed(f, 'a1', 'Read', T0 + 50, 'a.ts')
     expect(f.instances.a1!.reason).toBeUndefined()
     expect(f.cards.worker!.reason).toBeUndefined()
+  })
+})
+
+describe('token buckets', () => {
+  const T = 1_000_000
+  const usage = (n: number) => ({ input_tokens: n, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 })
+  const base = { ...EMPTY, startedAt: T, now: T }
+
+  test('bucketOf counts 30 s buckets from the start', () => {
+    expect(bucketOf(base, T)).toBe(0)
+    expect(bucketOf(base, T + BUCKET_MS - 1)).toBe(0)
+    expect(bucketOf(base, T + 3 * BUCKET_MS)).toBe(3)
+  })
+
+  test('addSpark adds into a bucket and drops the ones past the window', () => {
+    expect(addSpark({ '0': 5, '1': 2 }, 1, 3, 20)).toEqual({ '0': 5, '1': 5 })
+    expect(addSpark({ '0': 5, '9': 1 }, 10, 4, 10)).toEqual({ '9': 1, '10': 4 })
+  })
+
+  test('sparkValues reads the last n buckets oldest first, gaps as 0', () => {
+    expect(sparkValues({ '3': 7, '5': 2 }, 5, 4)).toEqual([0, 7, 0, 2])
+  })
+
+  test('a main step fills the flow bucket; an agent step fills its card too', () => {
+    const one = stepped(base, { model: 'claude-opus-5-5', usage: usage(100), advisorEnds: [] }, T + 31_000)
+    expect(one.spark).toEqual({ '1': 100 })
+    const withAgent = spawned(one, { agentId: 'a1', type: 'explorer', model: 'claude-haiku-5-5' }, T + 31_000)
+    const two = stepped(withAgent, { agentId: 'a1', model: 'claude-haiku-5-5', usage: usage(40), advisorEnds: [] }, T + 62_000)
+    expect(two.spark).toEqual({ '1': 100, '2': 40 })
+    expect(two.cards.explorer?.spark).toEqual({ '2': 40 })
+  })
+
+  test('a step with no tokens leaves the buckets alone', () => {
+    const same = stepped(base, { model: 'claude-opus-5-5', usage: null, advisorEnds: [] }, T + 1000)
+    expect(same.spark).toEqual({})
+  })
+
+  test('clockKey moves per bucket only while a spark exists', () => {
+    expect(clockKey(base, T)).toBe(clockKey(base, T + BUCKET_MS))
+    const sparked = { ...base, spark: { '0': 1 } }
+    expect(clockKey(sparked, T)).not.toBe(clockKey(sparked, T + BUCKET_MS))
+  })
+
+  test('a v3 flow starts over as v4 with empty buckets', () => {
+    const old = { ...base, version: 3 } as unknown as typeof base
+    const fresh = started(old, T + 5)
+    expect(fresh.version).toBe(FLOW_VERSION)
+    expect(FLOW_VERSION).toBe(4)
+    expect(fresh.spark).toEqual({})
   })
 })

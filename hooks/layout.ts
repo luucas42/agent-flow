@@ -3,7 +3,7 @@ import { WHITE } from './format'
 export const GAP = 2
 export const MIN_CARD = 24
 export const MAX_CARD = 34
-export const ASK_WIDTH = 10
+export const ASK_WIDTH = 12
 export const MAIN_ALONE = 40
 export const COMPACT_BELOW = 60
 

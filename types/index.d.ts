@@ -7,6 +7,9 @@ export type LoopInfo = {
   tokens: number
 }
 
+/** Tokens added per 30 s bucket, keyed by the bucket's index since the session started. */
+export type Spark = Record<string, number>
+
 export type CardStatus = 'running' | 'done' | 'failed' | 'stopped' | 'refused'
 
 /** One subagent type: every instance of it this session, drawn as one card. */
@@ -22,6 +25,7 @@ export type Card = LoopInfo & {
   lastRunMs?: number
   lastTool?: string
   verbCounts: Record<string, number>
+  spark: Spark
 }
 
 /** One spawned agent, a row of its card's list. */
@@ -58,6 +62,7 @@ export type Flow = {
   advisor: Advisor
   cards: Record<string, Card>
   instances: Record<string, Instance>
+  spark: Spark
   batch?: Batch
   transcriptPath?: string
 }

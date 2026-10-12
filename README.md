@@ -1,40 +1,40 @@
 # agent-flow
 
-A live workflow panel for Claude Code. It shows the main model, the advisor and every subagent the session spawns as cards, joined by `delegates` / `asks` arrows. The panel docks on the right of the terminal and opens by itself when a session starts.
+A live workflow panel for Claude Code. It shows the main model, the advisor and every subagent the session spawns as cards, joined by `delegates` / `asks` arrows, drawn as an animated HUD. The panel docks on the right of the terminal and opens by itself when a session starts.
 
 ```
- WORKFLOW                                      session $3.42 · ◷ 12m
+ ◈ WORKFLOW   $3.42  ·  ◷ 12m  ·  ● 2 live / 7  ·  1.24M tok             ▁▂▂▃▅█▇▅▃▂▃▅██▇▅▃▂▂▃  10m
  opus plans · sonnet edits · haiku reads · fable advises
 
-╭────────────────────────────────────╮        ╭──────────────────────────────╮
-│ Opus 5.5  MAIN SESSION             │  asks  │ Fable  ADVISOR               │
-│ effort ■■■■□ xhigh                 │◀──────▶│ » last asked 2m ago          │
-│ ● delegated · waiting on 2         │        │ ○ quiet          calls 3     │
-╰─────────────────┬──────────────────╯        ╰──────────────────────────────╯
-                  │ delegates
-        ┌─────────●──────────────┐
-        ▼                        ▼
-╭─────────────────────╮  ╭─────────────────────╮
-│ Haiku 5.5  [ ▾ ×2 ] │  │ Sonnet 5.5  [ ▸ ]   │
-│ EXPLORER            │  │ WORKER              │
-│ effort ■■■■□ xhigh  │  │ effort ■■□□□ medium │
-│ ● reading · 16 files│  │ ✓ done · 1m 12s     │
-│           356k tok  │  │            48k tok  │
-╰─────────────────────╯  ╰─────────────────────╯
-╭──────────────────────────────────────────────────────────────╮
-│ EXPLORER · 2 agents                                    ● 2   │
-│ ● #2  map the auth module           9 tools · 210k · 1m 05s  │
-│       Read auth/session.ts                                   │
-│ ● #1  find the config loader        7 tools · 146k · 1m 31s  │
-│       Grep "loadConfig"                                      │
-╰──────────────────────────────────────────────────────────────╯
+ ⠸ OPUS 5.5 · MAIN SESSION          ● LIVE              FABLE · ADVISOR                   ● ASKED
+│ effort ████████░░ xhigh                 │    asks    │ » last asked 2m ago                     │
+│ ● delegated · waiting on 2     412k tok │ ◀━·•·•·━▶  │ ● advised                       calls 3 │
+└────────────────────┬────────────────────┘            └─────────────────────────────────────────┘
+                     │ delegates
+               ┌──•──●──────────────────────────┬────────────────────────────────┐
+               ▼                                ▼                                ▼
+ ⠸ HAIKU 5.5 · EXPLORER [▾ ×5]    ✓ SONNET 5.5 · WORKER     [▸]    ⚠ SONNET 5.5 · REVIEWER   [▸]
+│ ███████████░░░░░░░ 3/5 done │  │ ██████████████████████ done │  │ ███████████████████ refused │
+│ ● reading · 16 files        │  │ ✓ done · 1m 12s             │  │ ⚠ refused · cyber           │
+│ 356k tok         ▁▂▃▅▆▇█▆▅▃ │  │ 48k tok          ▁▁▁▃▆▆██▆▁ │  │ 12k tok          ▁▁▁▁▁▁▁▄▄█ │
+└─────────────────────────────┘  └─────────────────────────────┘  └─────────────────────────────┘
+ EXPLORER · 5 agents                                                                     ● 2  ✓ 3
+│ ⠸ #5  map the auth module       Read auth/session.ts                   9 tools · 210k · 1m 05s │
+│ ⠸ #4  find the config loader    Grep "loadConfig"                      7 tools · 146k · 1m 31s │
+│ ✓ #3  list the API routes       found 14 routes in api/                    5 tools · 48k · 52s │
+│ ✓ #2  read the test setup       vitest, 3 projects                         4 tools · 31k · 40s │
+│ ✓ #1  scan package.json         12 scripts, pnpm                            2 tools · 9k · 18s │
+└────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## What it shows
 
-- **One card per agent type.** Parallel agents of the same type share a card and are counted as `×N`. Each card shows its model, its role, its effort level, what it is doing right now (`reading · 16 files`, `editing · 3 files`, `running · 2 commands`) and its token total. A finished card dims to `✓ done · <time>`.
-- **Arrows.** The `delegates` branch lights up in the color of each running agent. The `asks` arrow glows for a few seconds after every advisor call.
-- **The agent list.** Press a card's `[ ▸ ]` button, or its digit `1`–`9` while the pane has focus (ctrl+x tab), to open every agent of that type in place. Each row shows:
+- **One card per agent type.** Parallel agents of the same type share a card and are counted as `×N`. Each card has a coloured title band (`MODEL · ROLE`) and shows its effort level, what it is doing right now (`reading · 16 files`, `editing · 3 files`, `running · 2 commands`), its token total and a small token sparkline.
+- **Bands by tone.** A band is filled in the family colour while the card is live, tinted when it is done or stopped, amber for a refusal and red for a failure.
+- **Batch progress.** A card with several agents has a bar that fills as they finish (`3/5 done`). A single running agent shows a glow sweeping along its bar instead.
+- **Header and sparklines.** The strip at the top shows the session cost, how long it has run (`◷ 12m`, `1h 05m`, `4d 01h`), how many agents are live out of the total, the token count and a sparkline of the last 10 minutes.
+- **Animation.** Spinners turn on live bands and rows, dots flow along the `delegates` branch in the color of each running agent, and the `asks` arrow pulses for a few seconds after every advisor call. An idle session does not redraw.
+- **The agent list.** Click anywhere on a card, or press its digit `1`–`9`, to open every agent of that type in place; click the card or the list's title band again to close it. The digit keys work after you have clicked on the panel. Each row shows:
   - its task;
   - its current tool and target (`Edit auth/session.ts`, `Bash npm test`);
   - `tools · tokens · time`;
@@ -46,8 +46,7 @@ A live workflow panel for Claude Code. It shows the main model, the advisor and 
   - the session;
   - the agent;
   - the request IDs of the refused responses.
-- **Header.** The session's total cost and, after `◷`, how long the session has been running (`12m`, `1h 05m`, `4d 01h`).
-- **Narrow panes.** Below 60 columns, or when the pane is inline, the panel falls back to one line per agent.
+- **Narrow panes.** Below 60 columns, or when the pane is inline, the panel falls back to one line per agent. Surfaces other than the terminal keep the plain card layout.
 
 ## Notifications & sound
 
@@ -117,10 +116,13 @@ State lives in the session's `$.state`, so a reload keeps the panel. Agent cost 
 hooks/format.ts     names, tokens, durations, effort bars, tool verbs and targets
 hooks/model.ts      pure reducers over one state value (`flow`)
 hooks/layout.ts     card grid and the branch/arrow glyph runs
-hooks/view.tsx      the Pane tree: header, cards, arrows, agent list, compact mode
+hooks/scene.ts      a pure `Flow` to `Scene` step: all the formatted text the HUD shows
+hooks/hud.ts        a pure `Scene` to cell-exact lines and click targets, with the animation frames
+hooks/flow-client.tsx  the Client that draws the HUD, animates it and posts clicks and keys
+hooks/view.tsx      the plain Pane tree used off the terminal
 hooks/register.tsx  the event hooks, the ticker and `/flow`
 sounds/             done.wav (batch ended) and alert.wav (failure or refusal)
-tests/              claude plugin test (60 tests)
+tests/              claude plugin test (101 tests)
 ```
 
 ```

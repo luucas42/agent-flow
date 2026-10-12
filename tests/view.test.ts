@@ -13,7 +13,7 @@ describe('the panel', () => {
     await $.tool.call(inLoop({ tool: 'Read', file_path: '/a.ts' }, 'a1'))
     await drain($.turn.step({ turnId: 't1', index: 0, model: 'claude-haiku-5-5', effort: 'xhigh', messageCount: 1, agentId: 'a1' }))
 
-    for (const surface of ['terminal', 'desktop'] as const) {
+    for (const surface of ['desktop'] as const) {
       const ui = await $.ui.mount({ ...paneAt(104), surface })
       expect(await ui.find({ type: 'Text', text: 'WORKFLOW' })).toBeDefined()
       expect(await ui.find({ type: 'Text', text: 'Opus 5.5' })).toBeDefined()
@@ -37,7 +37,7 @@ describe('the panel', () => {
     await $.tool.call(inLoop({ tool: 'Edit', file_path: '/a.ts', old_string: 'a', new_string: 'b' }, 'a1'))
 
     for (const frame of [paneAt(50), paneAt(104, 'inline')]) {
-      const ui = await $.ui.mount({ ...frame, surface: 'terminal' })
+      const ui = await $.ui.mount({ ...frame, surface: 'desktop' })
       expect(await ui.find({ type: 'Text', text: ' · editing · 1 files · 0 tok' })).toBeDefined()
       expect(await ui.find({ type: 'Text', text: /MAIN SESSION/ })).toBeUndefined()
       await ui.unmount()
@@ -50,7 +50,7 @@ describe('the panel', () => {
       await $.agent.spawn(spawnOf(type))
     }
 
-    const ui = await $.ui.mount({ ...paneAt(104, 'dock', 'a2'), surface: 'terminal' })
+    const ui = await $.ui.mount({ ...paneAt(104, 'dock', 'a2'), surface: 'desktop' })
     expect(await ui.find({ type: 'Text', text: 'PLAN' })).toBeDefined()
     const bold = (await ui.findAll({ type: 'Box' })).filter(box => box.props.borderStyle === 'bold')
     expect(bold.length).toBe(1)
@@ -59,7 +59,7 @@ describe('the panel', () => {
 
   test('an empty session shows the main card alone', async ($, on) => {
     world(on)
-    const ui = await $.ui.mount({ ...paneAt(104), surface: 'terminal' })
+    const ui = await $.ui.mount({ ...paneAt(104), surface: 'desktop' })
     expect(await ui.find({ type: 'Text', text: '○ idle' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /delegates/ })).toBeUndefined()
     await ui.unmount()
@@ -71,7 +71,7 @@ describe('the panel', () => {
     await $.agent.spawn(spawnOf('worker', { model: 'claude-sonnet-5-5', description: 'add login tests' }))
     await $.tool.call(inLoop({ tool: 'Edit', file_path: '/repo/src/auth/session.ts', old_string: 'a', new_string: 'b' }, 'a1'))
 
-    for (const surface of ['terminal', 'desktop'] as const) {
+    for (const surface of ['desktop'] as const) {
       const ui = await $.ui.mount({ ...paneAt(104), surface })
       expect(await ui.find({ type: 'Text', text: 'WORKER · 2 agents' })).toBeUndefined()
 
@@ -93,7 +93,7 @@ describe('the panel', () => {
     world(on)
     await $.agent.spawn(spawnOf('worker', { description: 'refactor auth module' }))
 
-    const ui = await $.ui.mount({ ...paneAt(50), surface: 'terminal' })
+    const ui = await $.ui.mount({ ...paneAt(50), surface: 'desktop' })
     await ui.press({ key: 'toggle-worker' })
     expect(await ui.find({ type: 'Text', text: 'WORKER · 1 agent' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: 'refactor auth module' })).toBeDefined()
@@ -129,7 +129,7 @@ describe('the panel', () => {
       agentId: 'a1',
     })
 
-    const ui = await $.ui.mount({ ...paneAt(104), surface: 'terminal' })
+    const ui = await $.ui.mount({ ...paneAt(104), surface: 'desktop' })
     expect(await ui.find({ type: 'Text', text: '⚠ refused · cyber' })).toBeDefined()
     await ui.press({ key: 'toggle-worker' })
     expect(await ui.find({ type: 'Text', text: '      refused · cyber' })).toBeDefined()

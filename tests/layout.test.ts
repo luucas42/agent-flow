@@ -13,7 +13,7 @@ describe('layout', () => {
   })
 
   test('the top row splits around the asks arrow', () => {
-    expect(topRow(104, true)).toEqual({ main: 47, advisor: 47 })
+    expect(topRow(104, true)).toEqual({ main: 46, advisor: 46 })
     expect(topRow(104, false)).toEqual({ main: 40, advisor: 0 })
   })
 
