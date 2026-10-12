@@ -1,13 +1,17 @@
 import { atom, read, update } from 'claude-code'
-import type { AgentStatus, EngineInterface, PaneOpenArgs, Register } from 'claude-code'
+import type { AgentStatus, EngineInterface, PaneOpenArgs, Register, RenderSurface } from 'claude-code'
 
 import type { Flow } from '../types'
-import { firstLine, target } from './format'
+import { agentTranscript, firstLine, refusedRequestIds, target, ticketText } from './format'
+import type { Ticket } from './format'
 import {
   EMPTY,
+  NOTIFY_LEVELS,
   clockKey,
   costed,
   finished,
+  mainRefused,
+  notices,
   reset,
   runningIds,
   spawned,
@@ -16,8 +20,9 @@ import {
   toolUsed,
   turnEnded,
   turnStarted,
+  withTranscript,
 } from './model'
-import type { Outcome } from './model'
+import type { Notice, NotifyLevel, Outcome } from './model'
 import { view } from './view'
 
 const COMMAND = 'flow'
@@ -26,20 +31,48 @@ const OPEN: PaneOpenArgs = { id: PANE, title: 'agent flow', columns: 104 }
 const USAGE = 'Usage: /flow [show | hide | reset]'
 const TICK_MS = 1_000
 const SYNC_EVERY = 5
+const SOUND_GAP_MS = 3_000
+const TRANSCRIPT_TAIL = 3_000_000
 
 const flow = atom({ plugin: 'agent-flow', key: 'flow' } as const, EMPTY)
 const expanded = atom({ plugin: 'agent-flow', key: 'expanded' } as const, null)
 
 const ENDED: Partial<Record<AgentStatus, Outcome>> = { completed: 'done', failed: 'failed', killed: 'stopped' }
 
+/** How this load announces things: the person's settings, and when a sound last played. */
+const alerts: { level: NotifyLevel; isSoundOn: boolean; lastSoundAt: number } = {
+  level: 'batch-and-errors',
+  isSoundOn: true,
+  lastSoundAt: 0,
+}
+
+/** One toast for everything a change is worth saying, and at most one sound every few seconds. */
+function announce($: EngineInterface, list: Notice[], now: number): void {
+  if (list.length === 0) return
+  $.ui.toast(list.map(notice => notice.text).join('\n'))
+  const sound = list.some(n => n.sound === 'alert') ? 'alert' : list.some(n => n.sound === 'done') ? 'done' : undefined
+  if (sound === undefined || !alerts.isSoundOn || now - alerts.lastSoundAt < SOUND_GAP_MS) return
+  alerts.lastSoundAt = now
+  void $.audio.play({ asset: `sounds/${sound}.wav` }).catch(() => undefined)
+}
+
 /**
- * Applies a change stamped with the time. The panel is a bonus: a failure here
- * is swallowed, never thrown into the tool call, spawn or turn that raised it.
+ * Applies a change stamped with the time, then announces what it was worth.
+ * The panel is a bonus: a failure here is swallowed, never thrown into the
+ * tool call, spawn or turn that raised it.
  */
 async function apply($: EngineInterface, change: (f: Flow, now: number) => Flow): Promise<void> {
   try {
     const now = await $.clock.now()
-    await update($, flow, f => ({ ...change(f, now), now }))
+    const seen: { before?: Flow; after?: Flow } = {}
+    await update($, flow, f => {
+      seen.before = f
+      seen.after = { ...change(f, now), now }
+      return seen.after
+    })
+    if (seen.before !== undefined && seen.after !== undefined) {
+      announce($, notices(seen.before, seen.after, alerts.level), now)
+    }
   } catch {
     // Drawing must never cost the session a tool call, a spawn or a turn.
   }
@@ -62,6 +95,59 @@ async function resetAll($: EngineInterface): Promise<void> {
     await update($, expanded, () => null)
   } catch {
     // A list left open on a fresh panel only draws its empty frame.
+  }
+}
+
+/** Keeps where this session's transcript lives, for the request ids a copy looks up. */
+async function remember($: EngineInterface, path: string): Promise<void> {
+  try {
+    if ((await read($, flow)).transcriptPath !== path) await apply($, f => withTranscript(f, path))
+  } catch {
+    // Without it a copy only leaves out the request ids.
+  }
+}
+
+async function readRequestIds($: EngineInterface, path: string): Promise<string[]> {
+  try {
+    const text = await $.fs.read(path)
+    return typeof text === 'string' ? refusedRequestIds(text.slice(-TRANSCRIPT_TAIL)) : []
+  } catch {
+    return []
+  }
+}
+
+/** `[ copy ]`: the refusal's details for a support ticket, onto the person's clipboard. */
+async function copyDetails($: EngineInterface, which: string, surface: RenderSurface): Promise<void> {
+  try {
+    const current = await read($, flow)
+    const sessionId = await $.session.id().catch(() => undefined)
+    let ticket: Ticket | undefined
+    let path: string | undefined
+
+    if (which === 'main') {
+      const refusal = current.main.refusal
+      if (refusal === undefined) return
+      ticket = { at: refusal.at, model: current.main.model, category: refusal.category, sessionId, requestIds: [] }
+      path = current.transcriptPath
+    } else {
+      const instance = current.instances[which]
+      if (instance === undefined || instance.status !== 'refused') return
+      ticket = {
+        at: instance.endedAt ?? current.now,
+        model: current.cards[instance.type]?.model,
+        category: instance.reason ?? 'unknown',
+        sessionId,
+        agent: { id: which, type: instance.type, n: instance.n },
+        requestIds: [],
+      }
+      path = current.transcriptPath === undefined ? undefined : agentTranscript(current.transcriptPath, which)
+    }
+
+    const requestIds = path === undefined ? [] : await readRequestIds($, path)
+    const copied = await $.ui.copy({ text: ticketText({ ...ticket, requestIds }), surface })
+    $.ui.toast(copied.isCopied ? 'Copied refusal details' : 'Could not copy: no clipboard here')
+  } catch {
+    $.ui.toast('Could not copy the refusal details')
   }
 }
 
@@ -105,7 +191,10 @@ async function sync($: EngineInterface): Promise<void> {
   }
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  alerts.level = NOTIFY_LEVELS.find(level => level === options.notifications) ?? 'batch-and-errors'
+  alerts.isSoundOn = options.sound !== false
+  alerts.lastSoundAt = 0
   const ticking: Ticking = { beats: 0, isBusy: false }
   let ticker: { cancel: () => void } | undefined
 
@@ -125,6 +214,16 @@ export const register: Register = on => {
     } catch {
       // The panel is a bonus: never hold the session up.
     }
+    return next(e)
+  })
+
+  on('classic.UserPromptSubmit', async ($, e, next) => {
+    await remember($, e.transcript_path)
+    return next(e)
+  })
+
+  on('classic.Stop', async ($, e, next) => {
+    await remember($, e.transcript_path)
     return next(e)
   })
 
@@ -172,9 +271,14 @@ export const register: Register = on => {
 
   on('turn.complete', async ($, e, next) => {
     const agentId = e.agentId
-    const outcome: Outcome = e.reason === 'answer' ? 'done' : e.reason === 'aborted' ? 'stopped' : 'failed'
+    const category = e.reason === 'refusal' ? (e.refusal.category ?? 'unknown') : undefined
+    const outcome: Outcome =
+      e.reason === 'answer' ? 'done' : e.reason === 'aborted' ? 'stopped' : e.reason === 'refusal' ? 'refused' : 'failed'
     const answer = agentId === undefined ? undefined : firstLine(e.answer)
-    await apply($, (f, now) => (agentId === undefined ? turnEnded(f) : finished(f, agentId, outcome, now, answer)))
+    await apply($, (f, now) => {
+      if (agentId !== undefined) return finished(f, agentId, outcome, now, answer, category)
+      return category === undefined ? turnEnded(f) : mainRefused(f, category, now)
+    })
     return next(e)
   })
 
@@ -213,6 +317,7 @@ export const register: Register = on => {
       viewAgentId: e.props.view.agentId,
       expanded: open,
       onToggle: type => void update($, expanded, was => (was === type ? null : type)),
+      onCopy: (which, surface) => void copyDetails($, which, surface),
     })
   })
 }

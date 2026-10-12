@@ -1,9 +1,9 @@
-import type { Advisor, Card, CardStatus, Effort, Flow, Instance } from '../types'
+import type { Advisor, Batch, Card, CardStatus, Effort, Flow, Instance } from '../types'
 import { ROLES, ago, clip, duration, familyOf, tokens, verbOf } from './format'
 import type { Family } from './format'
 
 /** Bumped when the shape of `flow` changes; a session holding an older one starts over. */
-export const FLOW_VERSION = 2
+export const FLOW_VERSION = 3
 
 export const EMPTY: Flow = {
   version: FLOW_VERSION,
@@ -28,6 +28,12 @@ export type Spawn = { agentId: string; type: string; model?: string; parentAgent
 export type Step = { agentId?: string; model: string; effort?: Effort; usage: Usage | null; advisorEnds: number[] }
 export type Outcome = Exclude<CardStatus, 'running'>
 export type Line = { glyph: string; text: string }
+export type Listed = Instance & { id: string }
+
+export type NotifyLevel = 'batch-and-errors' | 'every-agent' | 'errors' | 'off'
+export const NOTIFY_LEVELS: readonly NotifyLevel[] = ['batch-and-errors', 'every-agent', 'errors', 'off']
+export type Sound = 'done' | 'alert'
+export type Notice = { text: string; sound?: Sound }
 
 export function sumUsage(usage: Usage | null): number {
   if (usage === null) return 0
@@ -54,13 +60,32 @@ export function reset(now: number, advisorName?: string): Flow {
   return { ...EMPTY, startedAt: now, now, advisor: { calls: 0, name: advisorName } }
 }
 
-export const turnStarted = (flow: Flow): Flow => ({ ...flow, main: { ...flow.main, turnActive: true } })
+export const turnStarted = (flow: Flow): Flow => ({
+  ...flow,
+  main: { ...flow.main, turnActive: true, refusal: undefined },
+})
 
 export const turnEnded = (flow: Flow): Flow => ({ ...flow, main: { ...flow.main, turnActive: false } })
 
+/** The main loop's turn ended in a refusal: flagged until the next turn starts. */
+export const mainRefused = (flow: Flow, category: string, now: number): Flow => ({
+  ...flow,
+  main: { ...flow.main, turnActive: false, refusal: { category, at: now } },
+})
+
+export const withTranscript = (flow: Flow, path: string): Flow =>
+  flow.transcriptPath === path ? flow : { ...flow, transcriptPath: path }
+
 /** A card coming back to life starts a fresh run: its clock and its counters. */
 function revived(card: Card, now: number): Card {
-  return { ...card, status: 'running', runStartedAt: now, verbCounts: {}, lastTool: undefined }
+  return { ...card, status: 'running', reason: undefined, runStartedAt: now, verbCounts: {}, lastTool: undefined }
+}
+
+/** An agent starts running: the first while none runs opens a new batch, the rest join it. */
+function joined(flow: Flow, agentId: string, now: number): Flow {
+  const batch = flow.batch
+  if (batch === undefined || totalRunning(flow) === 0) return { ...flow, batch: { startedAt: now, ids: [agentId] } }
+  return batch.ids.includes(agentId) ? flow : { ...flow, batch: { ...batch, ids: [...batch.ids, agentId] } }
 }
 
 export function spawned(flow: Flow, spawn: Spawn, now: number): Flow {
@@ -100,9 +125,10 @@ export function spawned(flow: Flow, spawn: Spawn, now: number): Flow {
     tools: 0,
     tokens: 0,
   }
+  const batched = joined(flow, spawn.agentId, now)
 
   return {
-    ...flow,
+    ...batched,
     cards: { ...flow.cards, [spawn.type]: card },
     instances: { ...flow.instances, [spawn.agentId]: instance },
   }
@@ -115,11 +141,15 @@ function touched(flow: Flow, agentId: string, now: number): Flow {
   const prior = flow.cards[instance.type]
   if (prior === undefined) return flow
   const base = prior.running === 0 ? revived(prior, now) : prior
+  const batched = joined(flow, agentId, now)
 
   return {
-    ...flow,
+    ...batched,
     cards: { ...flow.cards, [instance.type]: { ...base, running: base.running + 1 } },
-    instances: { ...flow.instances, [agentId]: { ...instance, status: 'running', endedAt: undefined, lastAt: now } },
+    instances: {
+      ...flow.instances,
+      [agentId]: { ...instance, status: 'running', endedAt: undefined, reason: undefined, lastAt: now },
+    },
   }
 }
 
@@ -189,14 +219,21 @@ export function stepped(flow: Flow, step: Step, now: number): Flow {
 }
 
 /** An agent ended. The card settles on how its last running instance ended. */
-export function finished(flow: Flow, agentId: string, outcome: Outcome, now: number, answer?: string): Flow {
+export function finished(
+  flow: Flow,
+  agentId: string,
+  outcome: Outcome,
+  now: number,
+  answer?: string,
+  reason?: string,
+): Flow {
   const instance = flow.instances[agentId]
   const card = instance === undefined ? undefined : flow.cards[instance.type]
   if (instance === undefined || card === undefined || instance.status !== 'running') return flow
   const running = Math.max(0, card.running - 1)
   const settled: Card =
     running === 0
-      ? { ...card, running, status: outcome, lastRunMs: now - card.runStartedAt }
+      ? { ...card, running, status: outcome, reason, lastRunMs: now - card.runStartedAt }
       : { ...card, running }
 
   return {
@@ -204,7 +241,7 @@ export function finished(flow: Flow, agentId: string, outcome: Outcome, now: num
     cards: { ...flow.cards, [instance.type]: settled },
     instances: {
       ...flow.instances,
-      [agentId]: { ...instance, status: outcome, endedAt: now, answer: answer ?? instance.answer },
+      [agentId]: { ...instance, status: outcome, endedAt: now, answer: answer ?? instance.answer, reason },
     },
   }
 }
@@ -218,9 +255,10 @@ export const isGlowing = (advisor: Advisor, now: number): boolean =>
   advisor.lastEndedAt !== undefined && now - advisor.lastEndedAt < GLOW_MS
 
 /** A type's agents for its list: running first (latest activity on top), then the ended (latest end on top). */
-export function instancesOf(flow: Flow, type: string): Instance[] {
-  return Object.values(flow.instances)
-    .filter(instance => instance.type === type)
+export function instancesOf(flow: Flow, type: string): Listed[] {
+  return Object.entries(flow.instances)
+    .filter(([, instance]) => instance.type === type)
+    .map(([id, instance]) => ({ ...instance, id }))
     .sort((a, b) => {
       const isRunningA = a.status === 'running'
       const isRunningB = b.status === 'running'
@@ -236,8 +274,9 @@ export function instancesOf(flow: Flow, type: string): Instance[] {
 export function clockKey(flow: Flow, now: number, expanded: string | null = null): string {
   const elapsed = Math.floor((now - flow.startedAt) / 60_000)
   const asked = flow.advisor.lastEndedAt === undefined ? '' : ago(now - flow.advisor.lastEndedAt)
+  const refused = flow.main.refusal === undefined ? '' : ago(now - flow.main.refusal.at)
   const isTicking = expanded !== null && instancesOf(flow, expanded).some(instance => instance.status === 'running')
-  return `${elapsed}|${isGlowing(flow.advisor, now)}|${asked}${isTicking ? `|${Math.floor(now / 1000)}` : ''}`
+  return `${elapsed}|${isGlowing(flow.advisor, now)}|${asked}|${refused}${isTicking ? `|${Math.floor(now / 1000)}` : ''}`
 }
 
 export const runningIds = (flow: Flow): string[] =>
@@ -253,6 +292,8 @@ export const cardsInOrder = (flow: Flow): Card[] => Object.values(flow.cards).so
 export const isAdvisorShown = (flow: Flow): boolean => flow.advisor.name !== undefined || flow.advisor.calls > 0
 
 export function mainState(flow: Flow): Line {
+  const refusal = flow.main.refusal
+  if (refusal !== undefined) return { glyph: '⚠', text: `refused · ${refusal.category} · ${ago(flow.now - refusal.at)}` }
   const n = totalRunning(flow)
   if (n > 0) return { glyph: '●', text: `delegated · waiting on ${n}` }
   return flow.main.turnActive ? { glyph: '●', text: 'thinking' } : { glyph: '○', text: 'idle' }
@@ -271,6 +312,8 @@ export function cardState(card: Card): Line {
       return { glyph: '✗', text: 'failed' }
     case 'stopped':
       return { glyph: '■', text: 'stopped' }
+    case 'refused':
+      return { glyph: '⚠', text: `refused · ${card.reason ?? 'unknown'}` }
   }
 }
 
@@ -288,6 +331,8 @@ export function instanceState(instance: Instance): { glyph: string; detail: stri
       return { glyph: '✗', detail: 'failed', isDim: true }
     case 'stopped':
       return { glyph: '■', detail: 'stopped', isDim: true }
+    case 'refused':
+      return { glyph: '⚠', detail: `refused · ${instance.reason ?? 'unknown'}`, isDim: false }
   }
 }
 
@@ -300,6 +345,7 @@ const COUNTED: ReadonlyArray<readonly [string, CardStatus]> = [
   ['✓', 'done'],
   ['✗', 'failed'],
   ['■', 'stopped'],
+  ['⚠', 'refused'],
 ]
 
 /** `● 9  ✓ 5  ✗ 1`: the non-zero counts of a list. */
@@ -332,3 +378,44 @@ export function legend(flow: Flow): Array<{ family: Family; word: string }> {
 /** Is the agent whose transcript is on screen one of this card's? */
 export const isViewed = (flow: Flow, card: Card, agentId: string | undefined): boolean =>
   agentId !== undefined && flow.instances[agentId]?.type === card.type
+
+/** `✓ 15 agents done · 4m 12s · 1 failed · 1 refused`. */
+function batchText(flow: Flow, batch: Batch): string {
+  const statuses = batch.ids.map(id => flow.instances[id]?.status)
+  const n = batch.ids.length
+  const parts = [`✓ ${n} ${n === 1 ? 'agent' : 'agents'} done · ${duration(flow.now - batch.startedAt)}`]
+  for (const status of ['failed', 'refused', 'stopped'] as const) {
+    const count = statuses.filter(s => s === status).length
+    if (count > 0) parts.push(`${count} ${status}`)
+  }
+  return parts.join(' · ')
+}
+
+/** What one change of the flow is worth telling the person, at their level. */
+export function notices(before: Flow, after: Flow, level: NotifyLevel): Notice[] {
+  if (level === 'off') return []
+  const out: Notice[] = []
+
+  for (const [id, instance] of Object.entries(after.instances)) {
+    const was = before.instances[id]
+    if (was === undefined || was.status !== 'running' || instance.status === 'running') continue
+    const who = `${instance.type} #${instance.n}`
+    if (instance.status === 'refused') {
+      out.push({ text: `⚠ ${who} refused · ${instance.reason ?? 'unknown'}`, sound: 'alert' })
+    } else if (instance.status === 'failed') {
+      out.push({ text: `✗ ${who} failed`, sound: 'alert' })
+    } else if (instance.status === 'done' && level === 'every-agent') {
+      out.push({ text: `✓ ${who} done · ${duration((instance.endedAt ?? after.now) - instance.startedAt)}` })
+    }
+  }
+
+  const refusal = after.main.refusal
+  if (refusal !== undefined && refusal.at !== before.main.refusal?.at) {
+    out.push({ text: `⚠ main session refused · ${refusal.category}`, sound: 'alert' })
+  }
+
+  if (level !== 'errors' && totalRunning(before) > 0 && totalRunning(after) === 0 && after.batch !== undefined) {
+    out.push({ text: batchText(after, after.batch), sound: 'done' })
+  }
+  return out
+}

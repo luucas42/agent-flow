@@ -11,6 +11,7 @@ export const COLORS: Record<Family, string> = {
 }
 export const ERROR_COLOR = '#E5534B'
 export const WHITE = '#FFFFFF'
+export const WARN_COLOR = '#F5A524'
 
 /** The word each family stands for in the legend, in legend order. */
 export const ROLES: ReadonlyArray<readonly [Exclude<Family, 'other'>, string]> = [
@@ -155,3 +156,52 @@ export function firstLine(answer: string): string | undefined {
   }
   return undefined
 }
+
+/** `2026-10-08 14:40:28 UTC`. */
+export function utc(ms: number): string {
+  return `${new Date(ms).toISOString().slice(0, 19).replace('T', ' ')} UTC`
+}
+
+/** The request ids of the latest refused responses in a transcript's text: up to `max`, each once, oldest first. */
+export function refusedRequestIds(jsonl: string, max = 3): string[] {
+  const found: string[] = []
+  const lines = jsonl.split('\n')
+  for (let i = lines.length - 1; i >= 0 && found.length < max; i--) {
+    const line = lines[i] ?? ''
+    if (!line.includes('"refusal"')) continue
+    try {
+      const entry = JSON.parse(line) as { requestId?: unknown; message?: { stop_reason?: unknown } }
+      const id = entry.requestId
+      if (entry.message?.stop_reason === 'refusal' && typeof id === 'string' && !found.includes(id)) found.push(id)
+    } catch {
+      // A line cut at the tail's start, or not JSON at all.
+    }
+  }
+  return found.reverse()
+}
+
+/** What a support ticket about one refusal needs. */
+export type Ticket = {
+  at: number
+  model?: string
+  category: string
+  sessionId?: string
+  agent?: { id: string; type: string; n: number }
+  requestIds: string[]
+}
+
+export function ticketText(ticket: Ticket): string {
+  return [
+    'Claude Code safeguard refusal',
+    `time: ${utc(ticket.at)}`,
+    `model: ${ticket.model ?? 'unknown'}`,
+    `category: ${ticket.category}`,
+    ...(ticket.sessionId === undefined ? [] : [`session: ${ticket.sessionId}`]),
+    ...(ticket.agent === undefined ? [] : [`agent: ${ticket.agent.id} (${ticket.agent.type} #${ticket.agent.n})`]),
+    ...(ticket.requestIds.length === 0 ? [] : [`request ids: ${ticket.requestIds.join(', ')}`]),
+  ].join('\n')
+}
+
+/** Where a subagent's own transcript lives, beside the session's. */
+export const agentTranscript = (sessionPath: string, agentId: string): string =>
+  `${sessionPath.replace(/\.jsonl$/, '')}/subagents/agent-${agentId}.jsonl`

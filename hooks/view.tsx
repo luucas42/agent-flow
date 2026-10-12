@@ -1,7 +1,7 @@
-import type { BoxProps, ButtonProps, ElementConstructor, RenderElement, TextProps } from 'claude-code'
+import type { BoxProps, ButtonProps, ElementConstructor, RenderElement, RenderSurface, TextProps } from 'claude-code'
 
-import type { Card, Effort, Flow } from '../types'
-import { COLORS, ERROR_COLOR, WHITE, effortBar, familyOf, minutes, modelName, tokens, usd } from './format'
+import type { Card, CardStatus, Effort, Flow } from '../types'
+import { COLORS, ERROR_COLOR, WARN_COLOR, WHITE, effortBar, familyOf, minutes, modelName, tokens, usd } from './format'
 import { ASK_WIDTH, COMPACT_BELOW, GAP, arrows, branch, centers, chunk, grid, topRow } from './layout'
 import type { Run } from './layout'
 import {
@@ -32,12 +32,20 @@ export type Frame = {
   viewAgentId?: string
   expanded: string | null
   onToggle: (type: string) => void
+  onCopy: (target: string, surface: RenderSurface) => void
 }
 
 type Look = { color: string; isDim: boolean; isBold: boolean; width: number }
 
 export function view(kit: Kit, flow: Flow, frame: Frame): RenderElement {
   return frame.placement === 'inline' || frame.bodyColumns < COMPACT_BELOW ? compact(kit, flow, frame) : full(kit, flow, frame)
+}
+
+/** A failed agent in red, a refused one in amber, the rest in their family's color. */
+function statusColor(status: CardStatus, model: string | undefined): string {
+  if (status === 'failed') return ERROR_COLOR
+  if (status === 'refused') return WARN_COLOR
+  return COLORS[familyOf(model)]
 }
 
 /** A run of text in its color, or dim where it has none. */
@@ -109,6 +117,11 @@ function toggle({ Button }: Kit, c: Card, index: number, frame: Frame): RenderEl
   )
 }
 
+/** `[ copy ]`: a refusal's details, ready for a support ticket, onto the clipboard. */
+function copyButton({ Button }: Kit, target: string, frame: Frame): RenderElement {
+  return <Button key={`copy-${target}`} label="copy" onPress={press => frame.onCopy(target, press.surface)} />
+}
+
 function header(kit: Kit, flow: Flow): RenderElement {
   const { Box, Text } = kit
   const cost = flow.costUsd === undefined ? '' : `session ${usd(flow.costUsd)} · `
@@ -132,11 +145,12 @@ function header(kit: Kit, flow: Flow): RenderElement {
   )
 }
 
-function mainCard(kit: Kit, flow: Flow, width: number): RenderElement {
-  const { Text } = kit
+function mainCard(kit: Kit, flow: Flow, width: number, frame: Frame): RenderElement {
+  const { Box, Text } = kit
   const color = COLORS[familyOf(flow.main.model)]
   const state = mainState(flow)
-  const isLive = state.glyph === '●'
+  const isRefused = flow.main.refusal !== undefined
+  const isLive = state.glyph !== '○'
   const rows = [
     <Text wrap="truncate-end">
       <Text bold>{modelName(flow.main.model)}</Text>
@@ -145,13 +159,20 @@ function mainCard(kit: Kit, flow: Flow, width: number): RenderElement {
     ...(flow.main.effort === undefined ? [] : [effortRow(kit, flow.main.effort, color, false)]),
     spread(
       kit,
-      <Text color={color} dimColor={!isLive} wrap="truncate-end">
+      <Text color={isRefused ? WARN_COLOR : color} dimColor={!isLive} wrap="truncate-end">
         {`${state.glyph} ${state.text}`}
       </Text>,
       <Text dimColor>{`${tokens(flow.main.tokens)} tok`}</Text>,
     ),
+    ...(isRefused
+      ? [
+          <Box flexDirection="row" justifyContent="flex-end">
+            {copyButton(kit, 'main', frame)}
+          </Box>,
+        ]
+      : []),
   ]
-  return card(kit, { color, isDim: !isLive, isBold: false, width }, rows)
+  return card(kit, { color: isRefused ? WARN_COLOR : color, isDim: !isLive, isBold: false, width }, rows)
 }
 
 function advisorCard(kit: Kit, flow: Flow, width: number): RenderElement {
@@ -195,7 +216,7 @@ function asks({ Box, Text }: Kit, isLive: boolean): RenderElement {
 function agentCard(kit: Kit, flow: Flow, c: Card, width: number, index: number, frame: Frame): RenderElement {
   const { Box, Text } = kit
   const isLive = c.status === 'running'
-  const color = c.status === 'failed' ? ERROR_COLOR : COLORS[familyOf(c.model)]
+  const color = statusColor(c.status, c.model)
   const state = cardState(c)
   const role = [
     <Text color={color} bold dimColor={!isLive}>
@@ -214,7 +235,7 @@ function agentCard(kit: Kit, flow: Flow, c: Card, width: number, index: number, 
     ),
     <Text wrap="truncate-end">{role}</Text>,
     ...(c.effort === undefined ? [] : [effortRow(kit, c.effort, color, !isLive)]),
-    <Text color={color} dimColor={!isLive} wrap="truncate-end">
+    <Text color={color} dimColor={!isLive && c.status !== 'refused'} wrap="truncate-end">
       {`${state.glyph} ${state.text}`}
     </Text>,
     <Box flexDirection="row" justifyContent="flex-end">
@@ -225,27 +246,31 @@ function agentCard(kit: Kit, flow: Flow, c: Card, width: number, index: number, 
 }
 
 /** The open card's agents, two lines each, framed in the card's color. */
-function section(kit: Kit, flow: Flow, c: Card, width: number): RenderElement {
+function section(kit: Kit, flow: Flow, c: Card, width: number, frame: Frame): RenderElement {
   const { Box, Text } = kit
-  const color = c.status === 'failed' ? ERROR_COLOR : COLORS[familyOf(c.model)]
+  const color = statusColor(c.status, c.model)
   const list = instancesOf(flow, c.type)
   const title = `${c.type.toUpperCase()} · ${list.length} ${list.length === 1 ? 'agent' : 'agents'}`
   const rows = list.flatMap(instance => {
     const state = instanceState(instance)
+    const rowColor = statusColor(instance.status, c.model)
+    const detail = (
+      <Text color={rowColor} dimColor={state.isDim} wrap="truncate-end">
+        {`      ${state.detail}`}
+      </Text>
+    )
     return [
       spread(
         kit,
         <Text wrap="truncate-end">
-          <Text color={color} dimColor={state.isDim}>{`${state.glyph} #${instance.n}  `}</Text>
+          <Text color={rowColor} dimColor={state.isDim}>{`${state.glyph} #${instance.n}  `}</Text>
           <Text bold={!state.isDim} dimColor={state.isDim}>
             {instance.description === '' ? 'untitled' : instance.description}
           </Text>
         </Text>,
         <Text dimColor>{instanceFigures(instance, flow.now)}</Text>,
       ),
-      <Text color={color} dimColor={state.isDim} wrap="truncate-end">
-        {`      ${state.detail}`}
-      </Text>,
+      instance.status === 'refused' ? spread(kit, detail, copyButton(kit, instance.id, frame)) : detail,
     ]
   })
 
@@ -269,7 +294,7 @@ function full(kit: Kit, flow: Flow, frame: Frame): RenderElement {
   const widths = topRow(frame.bodyColumns, hasAdvisor)
   const top = (
     <Box flexDirection="row" alignItems="center">
-      {mainCard(kit, flow, widths.main)}
+      {mainCard(kit, flow, widths.main, frame)}
       {hasAdvisor ? asks(kit, isGlowing(flow.advisor, flow.now)) : null}
       {hasAdvisor ? advisorCard(kit, flow, widths.advisor) : null}
     </Box>
@@ -299,7 +324,7 @@ function full(kit: Kit, flow: Flow, frame: Frame): RenderElement {
         <Box flexDirection="row" columnGap={GAP}>
           {row.map((c, i) => agentCard(kit, flow, c, width, r * perRow + i, frame))}
         </Box>
-        {open === undefined ? null : section(kit, flow, open, frame.bodyColumns)}
+        {open === undefined ? null : section(kit, flow, open, frame.bodyColumns, frame)}
       </Box>
     )
   })
@@ -320,13 +345,17 @@ function full(kit: Kit, flow: Flow, frame: Frame): RenderElement {
 function compact(kit: Kit, flow: Flow, frame: Frame): RenderElement {
   const { Box, Text } = kit
   const main = mainState(flow)
-  const lines: RenderElement[] = [
-    spread(kit, <Text bold>{'WORKFLOW'}</Text>, <Text dimColor>{minutes(flow.now - flow.startedAt)}</Text>),
+  const isRefused = flow.main.refusal !== undefined
+  const mainLine = (
     <Text wrap="truncate-end">
-      <Text color={COLORS[familyOf(flow.main.model)]}>{`${main.glyph} `}</Text>
+      <Text color={isRefused ? WARN_COLOR : COLORS[familyOf(flow.main.model)]}>{`${main.glyph} `}</Text>
       <Text bold>{modelName(flow.main.model)}</Text>
       <Text dimColor>{`  MAIN · ${main.text} · ${tokens(flow.main.tokens)} tok`}</Text>
-    </Text>,
+    </Text>
+  )
+  const lines: RenderElement[] = [
+    spread(kit, <Text bold>{'WORKFLOW'}</Text>, <Text dimColor>{minutes(flow.now - flow.startedAt)}</Text>),
+    isRefused ? spread(kit, mainLine, copyButton(kit, 'main', frame)) : mainLine,
   ]
 
   if (isAdvisorShown(flow)) {
@@ -342,7 +371,7 @@ function compact(kit: Kit, flow: Flow, frame: Frame): RenderElement {
   cardsInOrder(flow).forEach((c, index) => {
     const state = cardState(c)
     const isLive = c.status === 'running'
-    const color = c.status === 'failed' ? ERROR_COLOR : COLORS[familyOf(c.model)]
+    const color = statusColor(c.status, c.model)
     lines.push(
       <Box flexDirection="row">
         <Box flexShrink={0} marginRight={1}>
@@ -360,7 +389,7 @@ function compact(kit: Kit, flow: Flow, frame: Frame): RenderElement {
         </Text>
       </Box>,
     )
-    if (frame.expanded === c.type) lines.push(section(kit, flow, c, frame.bodyColumns))
+    if (frame.expanded === c.type) lines.push(section(kit, flow, c, frame.bodyColumns, frame))
   })
 
   return <Box flexDirection="column">{lines}</Box>

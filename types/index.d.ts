@@ -7,7 +7,7 @@ export type LoopInfo = {
   tokens: number
 }
 
-export type CardStatus = 'running' | 'done' | 'failed' | 'stopped'
+export type CardStatus = 'running' | 'done' | 'failed' | 'stopped' | 'refused'
 
 /** One subagent type: every instance of it this session, drawn as one card. */
 export type Card = LoopInfo & {
@@ -15,6 +15,7 @@ export type Card = LoopInfo & {
   order: number
   parentType?: string
   status: CardStatus
+  reason?: string
   running: number
   spawned: number
   runStartedAt: number
@@ -27,6 +28,7 @@ export type Card = LoopInfo & {
 export type Instance = {
   type: string
   status: CardStatus
+  reason?: string
   n: number
   description: string
   startedAt: number
@@ -39,6 +41,12 @@ export type Instance = {
   answer?: string
 }
 
+/** The main loop's last turn ended in a refusal: of what kind, and when. */
+export type Refusal = { category: string; at: number }
+
+/** The agents that ran together, from the first one starting to the last one ending. */
+export type Batch = { startedAt: number; ids: string[] }
+
 export type Advisor = { name?: string; calls: number; lastEndedAt?: number }
 
 export type Flow = {
@@ -46,10 +54,12 @@ export type Flow = {
   startedAt: number
   now: number
   costUsd?: number
-  main: LoopInfo & { turnActive: boolean }
+  main: LoopInfo & { turnActive: boolean; refusal?: Refusal }
   advisor: Advisor
   cards: Record<string, Card>
   instances: Record<string, Instance>
+  batch?: Batch
+  transcriptPath?: string
 }
 
 declare module 'claude-code' {

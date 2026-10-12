@@ -14,7 +14,9 @@ import {
   instanceState,
   instancesOf,
   legend,
+  mainRefused,
   mainState,
+  notices,
   reset,
   sectionCounts,
   spawned,
@@ -259,5 +261,88 @@ describe('agents of a type', () => {
     expect(f.instances).toEqual({})
     expect(f.startedAt).toBe(T0)
     expect(f.advisor).toEqual({ calls: 0, name: 'fable' })
+  })
+})
+
+describe('refusals, batches and notices', () => {
+  test('a refused agent keeps its category on the row, the card and the counts', () => {
+    let f = spawned(begin(), { agentId: 'a1', type: 'worker' }, T0)
+    f = spawned(f, { agentId: 'a2', type: 'worker' }, T0)
+    f = finished(f, 'a1', 'refused', T0 + 5, undefined, 'cyber')
+    expect(instanceState(f.instances.a1!)).toEqual({ glyph: '⚠', detail: 'refused · cyber', isDim: false })
+    f = finished(f, 'a2', 'refused', T0 + 6, undefined, 'cyber')
+    expect(cardState(f.cards.worker!)).toEqual({ glyph: '⚠', text: 'refused · cyber' })
+    expect(sectionCounts(instancesOf(f, 'worker'))).toBe('⚠ 2')
+    expect(instancesOf(f, 'worker').map(i => i.id).sort()).toEqual(['a1', 'a2'])
+  })
+
+  test('a main refusal shows until the next turn starts', () => {
+    let f = mainRefused(turnStarted(begin()), 'cyber', T0 + 30_000)
+    expect(mainState({ ...f, now: T0 + 150_000 })).toEqual({ glyph: '⚠', text: 'refused · cyber · 2m ago' })
+    expect(clockKey(f, T0 + 80_000)).not.toBe(clockKey(f, T0 + 95_000))
+    f = turnStarted(f)
+    expect(f.main.refusal).toBeUndefined()
+    expect(mainState(f)).toEqual({ glyph: '●', text: 'thinking' })
+  })
+
+  test('a batch opens with the first running agent and closes with a summary', () => {
+    let f = spawned(begin(), { agentId: 'a1', type: 'worker' }, T0)
+    f = spawned(f, { agentId: 'a2', type: 'worker' }, T0 + 1)
+    f = spawned(f, { agentId: 'a3', type: 'explorer' }, T0 + 2)
+    expect(f.batch).toEqual({ startedAt: T0, ids: ['a1', 'a2', 'a3'] })
+    f = finished(f, 'a1', 'done', T0 + 10)
+    f = finished(f, 'a2', 'failed', T0 + 20)
+    const before = f
+    f = { ...finished(f, 'a3', 'refused', T0 + 252_000, undefined, 'cyber'), now: T0 + 252_000 }
+    expect(notices(before, f, 'batch-and-errors')).toEqual([
+      { text: '⚠ explorer #1 refused · cyber', sound: 'alert' },
+      { text: '✓ 3 agents done · 4m 12s · 1 failed · 1 refused', sound: 'done' },
+    ])
+  })
+
+  test('a new batch starts once every agent has ended', () => {
+    let f = spawned(begin(), { agentId: 'a1', type: 'worker' }, T0)
+    f = finished(f, 'a1', 'done', T0 + 5)
+    f = spawned(f, { agentId: 'a2', type: 'worker' }, T0 + 100)
+    expect(f.batch).toEqual({ startedAt: T0 + 100, ids: ['a2'] })
+  })
+
+  test('the notify level decides what is announced', () => {
+    let f = spawned(begin(), { agentId: 'a1', type: 'worker' }, T0)
+    const before = f
+    f = { ...finished(f, 'a1', 'done', T0 + 21_000), now: T0 + 21_000 }
+    expect(notices(before, f, 'every-agent')).toEqual([
+      { text: '✓ worker #1 done · 21s' },
+      { text: '✓ 1 agent done · 21s', sound: 'done' },
+    ])
+    expect(notices(before, f, 'batch-and-errors')).toEqual([{ text: '✓ 1 agent done · 21s', sound: 'done' }])
+    expect(notices(before, f, 'errors')).toEqual([])
+    expect(notices(before, f, 'off')).toEqual([])
+  })
+
+  test('failures and a main refusal are announced at the errors level', () => {
+    let f = spawned(begin(), { agentId: 'a1', type: 'worker' }, T0)
+    f = spawned(f, { agentId: 'a2', type: 'worker' }, T0)
+    const before = f
+    f = mainRefused(finished(f, 'a1', 'failed', T0 + 5), 'cyber', T0 + 6)
+    expect(notices(before, f, 'errors')).toEqual([
+      { text: '✗ worker #1 failed', sound: 'alert' },
+      { text: '⚠ main session refused · cyber', sound: 'alert' },
+    ])
+  })
+
+  test('a second completion announces nothing', () => {
+    let f = spawned(begin(), { agentId: 'a1', type: 'worker' }, T0)
+    f = spawned(f, { agentId: 'a2', type: 'worker' }, T0)
+    f = finished(f, 'a1', 'failed', T0 + 5)
+    expect(notices(f, finished(f, 'a1', 'failed', T0 + 9), 'every-agent')).toEqual([])
+  })
+
+  test('a resumed agent loses its old refusal', () => {
+    let f = spawned(begin(), { agentId: 'a1', type: 'worker' }, T0)
+    f = finished(f, 'a1', 'refused', T0 + 5, undefined, 'cyber')
+    f = toolUsed(f, 'a1', 'Read', T0 + 50, 'a.ts')
+    expect(f.instances.a1!.reason).toBeUndefined()
+    expect(f.cards.worker!.reason).toBeUndefined()
   })
 })

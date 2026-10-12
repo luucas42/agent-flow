@@ -99,4 +99,46 @@ describe('the panel', () => {
     expect(await ui.find({ type: 'Text', text: 'refactor auth module' })).toBeDefined()
     await ui.unmount()
   })
+  test('a refused row offers its details for a support ticket', async ($, on) => {
+    world(on)
+    const copied: string[] = []
+    on('classic.UserPromptSubmit', () => ({}))
+    on('session.id', () => ({ value: 'sess-1' }))
+    on('fs.read', (_, e) => ({
+      value:
+        e.path === '/tmp/sess/subagents/agent-a1.jsonl'
+          ? JSON.stringify({ requestId: 'req_9', message: { stop_reason: 'refusal' } })
+          : '',
+    }))
+    on('ui.copy', (_, e) => {
+      copied.push(e.text)
+      return { value: { isCopied: true as const } }
+    })
+    on('ui.toast', () => ({ value: undefined }))
+    on('audio.play', () => ({ value: undefined }))
+
+    await $.classic.UserPromptSubmit({ prompt: 'scan', transcript_path: '/tmp/sess.jsonl' })
+    await $.agent.spawn(spawnOf('worker', { model: 'claude-sonnet-5-5', description: 'probe host' }))
+    await $.turn.complete({
+      answer: '',
+      durationMs: 5,
+      isAborted: false,
+      turnId: 't1',
+      reason: 'refusal',
+      refusal: { category: 'cyber', explanation: null },
+      agentId: 'a1',
+    })
+
+    const ui = await $.ui.mount({ ...paneAt(104), surface: 'terminal' })
+    expect(await ui.find({ type: 'Text', text: '⚠ refused · cyber' })).toBeDefined()
+    await ui.press({ key: 'toggle-worker' })
+    expect(await ui.find({ type: 'Text', text: '      refused · cyber' })).toBeDefined()
+    await ui.press({ key: 'copy-a1' })
+    expect(copied.length).toBe(1)
+    expect(copied[0]).toContain('category: cyber')
+    expect(copied[0]).toContain('agent: a1 (worker #1)')
+    expect(copied[0]).toContain('session: sess-1')
+    expect(copied[0]).toContain('request ids: req_9')
+    await ui.unmount()
+  })
 })

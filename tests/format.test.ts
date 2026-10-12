@@ -1,6 +1,23 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { ago, clip, duration, effortBar, familyOf, firstLine, minutes, modelName, target, tokens, usd, verbOf } from '../hooks/format'
+import {
+  agentTranscript,
+  ago,
+  clip,
+  duration,
+  effortBar,
+  familyOf,
+  firstLine,
+  minutes,
+  modelName,
+  refusedRequestIds,
+  target,
+  ticketText,
+  tokens,
+  usd,
+  utc,
+  verbOf,
+} from '../hooks/format'
 
 describe('format', () => {
   test('names models from ids and aliases', () => {
@@ -73,5 +90,49 @@ describe('format', () => {
     expect(firstLine('   \n  ')).toBeUndefined()
     expect(firstLine('y'.repeat(150))).toBe(`${'y'.repeat(99)}…`)
     expect(clip('short', 10)).toBe('short')
+  })
+  test('formats a refusal for a support ticket', () => {
+    const at = Date.UTC(2026, 9, 8, 14, 40, 28)
+    expect(utc(at)).toBe('2026-10-08 14:40:28 UTC')
+    expect(agentTranscript('/p/sess.jsonl', 'a1')).toBe('/p/sess/subagents/agent-a1.jsonl')
+    expect(
+      ticketText({
+        at,
+        model: 'claude-mythos-5-1',
+        category: 'cyber',
+        sessionId: 's1',
+        agent: { id: 'a1', type: 'worker', n: 3 },
+        requestIds: ['req_1', 'req_2'],
+      }),
+    ).toBe(
+      [
+        'Claude Code safeguard refusal',
+        'time: 2026-10-08 14:40:28 UTC',
+        'model: claude-mythos-5-1',
+        'category: cyber',
+        'session: s1',
+        'agent: a1 (worker #3)',
+        'request ids: req_1, req_2',
+      ].join('\n'),
+    )
+    expect(ticketText({ at: 0, category: 'cyber', requestIds: [] })).toBe(
+      ['Claude Code safeguard refusal', 'time: 1970-01-01 00:00:00 UTC', 'model: unknown', 'category: cyber'].join('\n'),
+    )
+  })
+
+  test('finds the request ids of refused responses at the end of a transcript', () => {
+    const row = (id: string, stop: string) => JSON.stringify({ type: 'assistant', requestId: id, message: { stop_reason: stop } })
+    const text = [
+      '{"cut',
+      row('req_old', 'refusal'),
+      row('req_ok', 'end_turn'),
+      row('req_a', 'refusal'),
+      row('req_a', 'refusal'),
+      row('req_b', 'refusal'),
+      'not json "refusal"',
+    ].join('\n')
+    expect(refusedRequestIds(text)).toEqual(['req_old', 'req_a', 'req_b'])
+    expect(refusedRequestIds(text, 2)).toEqual(['req_a', 'req_b'])
+    expect(refusedRequestIds('')).toEqual([])
   })
 })

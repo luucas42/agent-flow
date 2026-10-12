@@ -109,4 +109,77 @@ describe('the flow follows the session', () => {
       answer: 'Done',
     })
   })
+  test('a refused subagent is flagged and announced with an alert', async ($, on) => {
+    const { peek } = world(on)
+    const toasts: string[] = []
+    const sounds: string[] = []
+    on('ui.toast', (_, e) => {
+      toasts.push(e.text)
+      return { value: undefined }
+    })
+    on('audio.play', (_, e) => {
+      sounds.push(JSON.stringify(e.clip))
+      return { value: undefined }
+    })
+
+    await $.agent.spawn(spawnOf('worker'))
+    await $.agent.spawn(spawnOf('worker'))
+    await $.turn.complete({
+      answer: '',
+      durationMs: 5,
+      isAborted: false,
+      turnId: 't1',
+      reason: 'refusal',
+      refusal: { category: 'cyber', explanation: null },
+      agentId: 'a1',
+    })
+
+    expect(peek()?.instances.a1).toMatchObject({ status: 'refused', reason: 'cyber' })
+    expect(toasts).toEqual(['⚠ worker #1 refused · cyber'])
+    expect(sounds).toEqual(['{"asset":"sounds/alert.wav"}'])
+  })
+
+  test('a finished batch is summed up with the done sound', async ($, on) => {
+    const { clock } = world(on)
+    const toasts: string[] = []
+    const sounds: string[] = []
+    on('ui.toast', (_, e) => {
+      toasts.push(e.text)
+      return { value: undefined }
+    })
+    on('audio.play', (_, e) => {
+      sounds.push(JSON.stringify(e.clip))
+      return { value: undefined }
+    })
+
+    await $.agent.spawn(spawnOf('worker'))
+    await clock.advance(21_000)
+    await $.turn.complete({ answer: 'ok', durationMs: 21_000, isAborted: false, turnId: 't1', reason: 'answer', agentId: 'a1' })
+
+    expect(toasts).toEqual(['✓ 1 agent done · 21s'])
+    expect(sounds).toEqual(['{"asset":"sounds/done.wav"}'])
+  })
+
+  test('sound off and errors-only keep it quiet', { options: { sound: false, notifications: 'errors' } }, async ($, on) => {
+    world(on)
+    const toasts: string[] = []
+    const sounds: string[] = []
+    on('ui.toast', (_, e) => {
+      toasts.push(e.text)
+      return { value: undefined }
+    })
+    on('audio.play', (_, e) => {
+      sounds.push(JSON.stringify(e.clip))
+      return { value: undefined }
+    })
+
+    await $.agent.spawn(spawnOf('worker'))
+    await $.turn.complete({ answer: 'ok', durationMs: 5, isAborted: false, turnId: 't1', reason: 'answer', agentId: 'a1' })
+    expect(toasts).toEqual([])
+
+    await $.agent.spawn(spawnOf('worker'))
+    await $.turn.complete({ answer: '', durationMs: 5, isAborted: false, turnId: 't2', reason: 'error', agentId: 'a2' })
+    expect(toasts).toEqual(['✗ worker #2 failed'])
+    expect(sounds).toEqual([])
+  })
 })

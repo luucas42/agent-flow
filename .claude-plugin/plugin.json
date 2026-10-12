@@ -1,6 +1,6 @@
 {
   "name": "agent-flow",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A live workflow panel: the main model, the advisor and every spawned agent as cards joined by arrows",
   "author": {
     "name": "luucas42"
@@ -15,5 +15,20 @@
     "workflow",
     "panel"
   ],
+  "userConfig": {
+    "notifications": {
+      "type": "string",
+      "title": "Notifications",
+      "description": "batch-and-errors: a toast when an agent fails or is refused, and when every running agent has ended. every-agent: also one per finished agent. errors: failures and refusals only. off: none.",
+      "default": "batch-and-errors",
+      "options": ["batch-and-errors", "every-agent", "errors", "off"]
+    },
+    "sound": {
+      "type": "boolean",
+      "title": "Sound",
+      "description": "Play a short tone with notifications: a rising ding when a batch ends, a low tone on a failure or refusal (macOS).",
+      "default": true
+    }
+  },
   "types": "./types/index.d.ts"
 }
