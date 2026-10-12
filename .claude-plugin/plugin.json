@@ -1,6 +1,6 @@
 {
   "name": "agent-flow",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "A live workflow panel: the main model, the advisor and every spawned agent as cards joined by arrows",
   "author": {
     "name": "luucas42"

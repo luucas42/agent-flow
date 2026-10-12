@@ -3,7 +3,7 @@
 A live workflow panel for Claude Code. It shows the main model, the advisor and every subagent the session spawns as cards, joined by `delegates` / `asks` arrows. The panel docks on the right of the terminal and opens by itself when a session starts.
 
 ```
- WORKFLOW                                        session $3.42 · 12m
+ WORKFLOW                                      session $3.42 · ◷ 12m
  opus plans · sonnet edits · haiku reads · fable advises
 
 ╭────────────────────────────────────╮        ╭──────────────────────────────╮
@@ -46,7 +46,7 @@ A live workflow panel for Claude Code. It shows the main model, the advisor and 
   - the session;
   - the agent;
   - the request IDs of the refused responses.
-- **Header.** The session's total cost and how long the session has been running.
+- **Header.** The session's total cost and, after `◷`, how long the session has been running (`12m`, `1h 05m`, `4d 01h`).
 - **Narrow panes.** Below 60 columns, or when the pane is inline, the panel falls back to one line per agent.
 
 ## Notifications & sound

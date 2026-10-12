@@ -75,7 +75,14 @@ export function ago(ms: number): string {
 
 export const usd = (n: number): string => `$${n.toFixed(2)}`
 
-export const minutes = (ms: number): string => `${Math.max(0, Math.floor(ms / 60_000))}m`
+/** Minute-grained session age that grows its unit: `12m`, `1h 05m`, `4d 01h`. */
+export function minutes(ms: number): string {
+  const m = Math.max(0, Math.floor(ms / 60_000))
+  if (m < 60) return `${m}m`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}h ${String(m % 60).padStart(2, '0')}m`
+  return `${Math.floor(h / 24)}d ${String(h % 24).padStart(2, '0')}h`
+}
 
 const LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 

@@ -56,6 +56,8 @@ describe('format', () => {
     expect(ago(7_200_000)).toBe('2h ago')
     expect(usd(3.4)).toBe('$3.40')
     expect(minutes(12 * 60_000 + 5)).toBe('12m')
+    expect(minutes(65 * 60_000)).toBe('1h 05m')
+    expect(minutes(5778 * 60_000)).toBe('4d 00h')
   })
 
   test('draws effort bars', () => {

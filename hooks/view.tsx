@@ -135,7 +135,7 @@ function header(kit: Kit, flow: Flow): RenderElement {
 
   return (
     <Box flexDirection="column" marginBottom={1}>
-      {spread(kit, <Text bold>{'WORKFLOW'}</Text>, <Text dimColor>{`${cost}${minutes(flow.now - flow.startedAt)}`}</Text>)}
+      {spread(kit, <Text bold>{'WORKFLOW'}</Text>, <Text dimColor>{`${cost}◷ ${minutes(flow.now - flow.startedAt)}`}</Text>)}
       {words.length === 0 ? (
         <Text dimColor>{'waiting for the first turn'}</Text>
       ) : (
@@ -354,7 +354,7 @@ function compact(kit: Kit, flow: Flow, frame: Frame): RenderElement {
     </Text>
   )
   const lines: RenderElement[] = [
-    spread(kit, <Text bold>{'WORKFLOW'}</Text>, <Text dimColor>{minutes(flow.now - flow.startedAt)}</Text>),
+    spread(kit, <Text bold>{'WORKFLOW'}</Text>, <Text dimColor>{`◷ ${minutes(flow.now - flow.startedAt)}`}</Text>),
     isRefused ? spread(kit, mainLine, copyButton(kit, 'main', frame)) : mainLine,
   ]
 
